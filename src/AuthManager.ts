@@ -4,6 +4,8 @@
  * @implements FR48, FR50, FR51
  */
 
+import { WardenError } from './errors.js'
+
 export interface UserPayload {
   id: string
   roles?: string[]
@@ -42,7 +44,7 @@ export class AuthManager {
     }
     // Validate defaultStrategy exists (if strategies were provided)
     if (Object.keys(config.strategies).length > 0 && !this.strategies.has(config.defaultStrategy)) {
-      throw new Error(`[WARDEN_INVALID_CONFIG] defaultStrategy '${config.defaultStrategy}' is not present in strategies`)
+      throw new WardenError('INVALID_CONFIG', `defaultStrategy '${config.defaultStrategy}' is not present in strategies`)
     }
   }
 
@@ -90,7 +92,9 @@ export class AuthManager {
     const strategyName = name ?? this.defaultStrategy
     const strategy = this.strategies.get(strategyName)
     if (!strategy) {
-      throw new Error(`[WARDEN_STRATEGY_NOT_FOUND] Auth strategy '${strategyName}' not registered`)
+      throw new WardenError('STRATEGY_NOT_FOUND', `Auth strategy '${strategyName}' not registered`, {
+        hint: 'Call registerStrategy() before using this strategy name.',
+      })
     }
     return strategy
   }
