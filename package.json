@@ -6,6 +6,13 @@
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
-  "scripts": { "build": "tsc", "test": "vitest run" },
-  "devDependencies": { "typescript": "^5.7", "vitest": "^3" }
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "reflect-metadata": "^0.2.2",
+    "typescript": "^5.7",
+    "vitest": "^3"
+  }
 }

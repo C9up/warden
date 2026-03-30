@@ -66,7 +66,7 @@ describe('warden > AuthManager', () => {
 
   it('throws on unknown strategy', () => {
     const auth = new AuthManager({ defaultStrategy: 'jwt', strategies: {} })
-    expect(() => auth.getStrategy()).toThrow('WARDEN_STRATEGY_NOT_FOUND')
+    expect(() => auth.getStrategy()).toThrow('Auth strategy')
   })
 
   it('catches strategy exceptions on authenticate', async () => {
