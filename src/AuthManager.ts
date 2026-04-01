@@ -55,7 +55,9 @@ export class AuthManager {
   ): Promise<AuthResult> {
     const strategy = this.getStrategy(strategyName)
     try {
-      return await strategy.authenticate(credentials)
+      const result = await strategy.authenticate(credentials)
+      if (result.user) sanitizePayload(result.user)
+      return result
     } catch (err) {
       return { authenticated: false, error: err instanceof Error ? err.message : 'Unknown authentication error' }
     }
@@ -65,7 +67,9 @@ export class AuthManager {
   async verify(token: string, strategyName?: string): Promise<AuthResult> {
     const strategy = this.getStrategy(strategyName)
     try {
-      return await strategy.verify(token)
+      const result = await strategy.verify(token)
+      if (result.user) sanitizePayload(result.user)
+      return result
     } catch (err) {
       return { authenticated: false, error: err instanceof Error ? err.message : 'Unknown verification error' }
     }
@@ -107,5 +111,14 @@ export class AuthManager {
   /** Get all registered strategy names. */
   getStrategyNames(): string[] {
     return [...this.strategies.keys()]
+  }
+}
+
+/** Strip dangerous prototype-pollution keys from user payload. */
+function sanitizePayload(user: UserPayload): void {
+  for (const key of ['__proto__', 'constructor', 'prototype']) {
+    if (key in user) {
+      delete (user as Record<string, unknown>)[key]
+    }
   }
 }
