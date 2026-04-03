@@ -7,4 +7,6 @@
 export { AuthManager } from './AuthManager.js'
 export type { AuthConfig, AuthResult, AuthStrategy, UserPayload } from './AuthManager.js'
 export { Guard, Permission, Role, getGuardMetadata, getPermissionMetadata, getRoleMetadata } from './Guard.js'
+export { JwtStrategy, generateJwtSecret } from './strategies/JwtStrategy.js'
+export type { JwtStrategyConfig } from './strategies/JwtStrategy.js'
 export { WardenError } from './errors.js'
