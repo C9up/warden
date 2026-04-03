@@ -1,8 +1,9 @@
 /**
  * JwtStrategy — HMAC-SHA256 JWT authentication strategy.
  *
- * Uses Node.js crypto. Will be replaced by Rust ream-security NAPI
- * when the binding is available.
+ * Pure TypeScript fallback implementation. When the ream-security NAPI binary
+ * is available, jwt_sign/jwt_verify from Rust can be used instead for
+ * higher throughput.
  */
 
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
