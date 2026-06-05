@@ -1,0 +1,16 @@
+[package]
+name = "warden-engine-napi"
+version = "0.1.0"
+edition = "2021"
+description = "NAPI bindings for the Warden crypto engine"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+warden-engine = { path = "../warden-engine" }
+napi = { version = "2", features = ["napi4"] }
+napi-derive = "2"
+
+[build-dependencies]
+napi-build = "2"
