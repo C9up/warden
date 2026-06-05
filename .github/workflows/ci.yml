@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout warden into workspace stub
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: ws/packages/warden
 
@@ -39,7 +39,7 @@ jobs:
       # add `token: ${{ secrets.SIGIL_REPO_TOKEN }}` and provision a PAT or
       # GitHub-App token scoped to C9up/sigil read access.
       - name: Checkout sigil into workspace stub
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: C9up/sigil
           path: ws/packages/sigil
@@ -56,13 +56,11 @@ jobs:
           { "name": "ream-dev-ci-stub", "private": true }
           EOF
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with: { version: 9 }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
-          cache: 'pnpm'
-          cache-dependency-path: ws/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install workspace dependencies
