@@ -1,0 +1,96 @@
+name: warden-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Single linux-x64-gnu job. Closes the H3 reviewer finding from story 40.3:
+  # the cross-package smoke test (`tests/integration/sigil-auth.test.ts`) skips
+  # silently when Sigil's NAPI binary is absent. This gate rebuilds Sigil's
+  # binary in-place and asserts that vitest reports ZERO skipped tests after
+  # the run — any skip means the smoke test silently dropped a driver, which
+  # would mask a regression.
+  #
+  # Layout: warden's `package.json` declares `@c9up/sigil: workspace:*` in
+  # devDependencies, so a standalone `pnpm install` crashes (no workspace).
+  # We build a minimal pnpm workspace stub on the runner with warden + sigil
+  # as workspace members so the protocol resolves correctly.
+  smoke-gate:
+    name: Cross-package smoke gate (Sigil + Warden)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout warden into workspace stub
+        uses: actions/checkout@v4
+        with:
+          path: ws/packages/warden
+
+      # Sibling clone of Sigil's standalone repo. Warden's CI tracks Sigil's
+      # main branch by design (cross-package smoke gate). If Sigil is private,
+      # add `token: ${{ secrets.SIGIL_REPO_TOKEN }}` and provision a PAT or
+      # GitHub-App token scoped to C9up/sigil read access.
+      - name: Checkout sigil into workspace stub
+        uses: actions/checkout@v4
+        with:
+          repository: C9up/sigil
+          path: ws/packages/sigil
+          ref: main
+
+      # Synthesize a pnpm-workspace.yaml so `workspace:*` protocol resolves.
+      - name: Synthesize workspace root
+        run: |
+          cat > ws/pnpm-workspace.yaml <<'EOF'
+          packages:
+            - "packages/*"
+          EOF
+          cat > ws/package.json <<'EOF'
+          { "name": "ream-dev-ci-stub", "private": true }
+          EOF
+
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: ws/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install workspace dependencies
+        working-directory: ws
+        run: pnpm install
+
+      - name: Build Sigil NAPI binary
+        working-directory: ws/packages/sigil
+        run: pnpm build:napi
+
+      - name: Vitest (JSON reporter)
+        working-directory: ws/packages/warden
+        run: pnpm test --reporter=json --outputFile=warden-results.json
+
+      - name: Assert zero skipped tests
+        working-directory: ws/packages/warden
+        run: |
+          # vitest 4.x JSON reporter labels skipped tests as "skipped"
+          # (Jest convention is "pending" — that does NOT apply here).
+          # Match all non-running variants to be future-proof.
+          count=$(jq '[.testResults[].assertionResults[]
+                       | select(.status=="skipped" or .status=="pending" or .status=="todo")]
+                      | length' warden-results.json)
+          if [ "$count" -ne 0 ]; then
+            echo "::error::$count warden tests were skipped — likely missing Sigil NAPI binary."
+            jq '[.testResults[].assertionResults[]
+                 | select(.status=="skipped" or .status=="pending" or .status=="todo")
+                 | .fullName]' warden-results.json
+            exit 1
+          fi
+          echo "OK — all warden tests ran (zero skipped)."
