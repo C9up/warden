@@ -3,7 +3,7 @@ import type { WardenConfig } from "./config.js";
 import { WardenError } from "./errors.js";
 import { MemoryRightsStore } from "./rights/MemoryRightsStore.js";
 import { RightsResolver } from "./rights/RightsResolver.js";
-import { _setAuth } from "./services/main.js";
+import { setAuth } from "./services/main.js";
 import { JwtStrategy } from "./strategies/JwtStrategy.js";
 
 interface WardenContainer {
@@ -79,6 +79,6 @@ export default class WardenProvider {
 	}
 
 	async boot() {
-		_setAuth(this.app.container.resolve(AuthManager) as AuthManager);
+		setAuth(this.app.container.resolve(AuthManager) as AuthManager);
 	}
 }

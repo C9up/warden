@@ -12,28 +12,28 @@
 
 import type { AuthManager } from "../AuthManager.js";
 
-let _instance: AuthManager | undefined;
+let instance: AuthManager | undefined;
 
 /** @internal Bind the singleton (called by WardenProvider). */
-export function _setAuth(instance: AuthManager): void {
-	_instance = instance;
+export function setAuth(value: AuthManager): void {
+	instance = value;
 }
 
 /** @internal Read the singleton (or `undefined` pre-boot). */
-export function _getAuth(): AuthManager | undefined {
-	return _instance;
+export function getAuth(): AuthManager | undefined {
+	return instance;
 }
 
 const auth: AuthManager = new Proxy({} as AuthManager, {
 	get(_target, prop) {
-		if (!_instance) {
+		if (!instance) {
 			throw new Error(
 				"[warden] AuthManager singleton accessed before WardenProvider.boot() ran. " +
 					"Check that `@c9up/warden/provider` is listed in your reamrc.ts providers.",
 			);
 		}
-		const value = Reflect.get(_instance, prop, _instance);
-		return typeof value === "function" ? value.bind(_instance) : value;
+		const value = Reflect.get(instance, prop, instance);
+		return typeof value === "function" ? value.bind(instance) : value;
 	},
 });
 
