@@ -1,6 +1,6 @@
 {
   "name": "@c9up/warden",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Warden — Authentication for the Ream framework",
   "license": "MIT",
   "type": "module",
