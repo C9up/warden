@@ -13,6 +13,7 @@ import "reflect-metadata";
 const GUARD_KEY = Symbol.for("warden:guard");
 const PERMISSION_KEY = Symbol.for("warden:permission");
 const ROLE_KEY = Symbol.for("warden:role");
+const MFA_KEY = Symbol.for("warden:mfa");
 
 /**
  * @Guard('jwt') — require authentication via the named strategy.
@@ -65,4 +66,24 @@ export function getRoleMetadata(
 	propertyKey: string | symbol,
 ): string[] {
 	return Reflect.getOwnMetadata(ROLE_KEY, target, propertyKey) ?? [];
+}
+
+/**
+ * @RequireMfa() — require the authenticated user to have completed multi-factor
+ * authentication. The auth middleware rejects with 403 `MFA_REQUIRED` when the
+ * user payload lacks a truthy `mfa` claim (set by your MFA step-up flow once
+ * `MfaManager.verify()` succeeds).
+ */
+export function RequireMfa(): MethodDecorator {
+	return (target, propertyKey) => {
+		Reflect.defineMetadata(MFA_KEY, true, target, propertyKey);
+	};
+}
+
+/** Whether the route requires completed MFA. */
+export function getRequireMfaMetadata(
+	target: object,
+	propertyKey: string | symbol,
+): boolean {
+	return Reflect.getOwnMetadata(MFA_KEY, target, propertyKey) ?? false;
 }

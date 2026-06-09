@@ -16,6 +16,7 @@
  */
 
 import type { UserPayload } from "./AuthManager.js";
+import type { MfaManager } from "./mfa/MfaManager.js";
 import type { RightsStore } from "./rights/types.js";
 
 export interface JwtConfig {
@@ -40,6 +41,12 @@ export interface WardenConfig {
 	 * in-memory shipped).
 	 */
 	rights?: { store?: RightsStore };
+	/**
+	 * Multi-factor authentication. Supply a configured `MfaManager` (built with
+	 * your persistent stores + providers) to register it in the container as
+	 * `MfaManager` / `"mfa"`. Required to use `@RequireMfa` step-up flows.
+	 */
+	mfa?: { manager: MfaManager };
 }
 
 /** Typed config helper — identity function for editor inference. */

@@ -25,6 +25,7 @@ import {
 import {
 	getGuardMetadata,
 	getPermissionMetadata,
+	getRequireMfaMetadata,
 	getRoleMetadata,
 } from "./Guard.js";
 import type { SessionStore } from "./strategies/SessionStrategy.js";
@@ -167,6 +168,19 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 		if (denied) {
 			ctx.response.status(403);
 			ctx.response.json({ error: { code: "FORBIDDEN", message: denied } });
+			return;
+		}
+
+		// @RequireMfa gate: the user must carry a truthy `mfa` claim, set by the
+		// app's step-up flow once MfaManager.verify() succeeds.
+		if (getRequireMfaMetadata(controller, action) && user.mfa !== true) {
+			ctx.response.status(403);
+			ctx.response.json({
+				error: {
+					code: "MFA_REQUIRED",
+					message: "Multi-factor authentication is required for this action.",
+				},
+			});
 			return;
 		}
 	}

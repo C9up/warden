@@ -44,10 +44,63 @@ export {
 	Guard,
 	getGuardMetadata,
 	getPermissionMetadata,
+	getRequireMfaMetadata,
 	getRoleMetadata,
 	Permission,
+	RequireMfa,
 	Role,
 } from "./Guard.js";
+export type {
+	BackupCodesConfig,
+	BackupCodesResult,
+	BackupCodeVerification,
+} from "./mfa/BackupCodesProvider.js";
+export { BackupCodesProvider } from "./mfa/BackupCodesProvider.js";
+export type {
+	MfaFactor,
+	MfaFactorKind,
+	MfaFactorStore,
+	MfaFactorSummary,
+	MfaManagerConfig,
+} from "./mfa/MfaManager.js";
+export { MemoryMfaFactorStore, MfaManager } from "./mfa/MfaManager.js";
+export type {
+	OtpChallenge,
+	OtpChallengeStore,
+	OtpConfig,
+	OtpDeliveryChannel,
+	OtpFailureReason,
+	OtpStartResult,
+	OtpVerification,
+} from "./mfa/OtpProvider.js";
+export { MemoryOtpChallengeStore, OtpProvider } from "./mfa/OtpProvider.js";
+export type {
+	TotpAlgorithm,
+	TotpConfig,
+	TotpEnrollment,
+} from "./mfa/TotpProvider.js";
+export { TotpProvider } from "./mfa/TotpProvider.js";
+export type {
+	AuthenticationOptionsJSON,
+	AuthenticationResponseJSON,
+	RegistrationOptionsJSON,
+	RegistrationResponseJSON,
+	StoredPasskey,
+	WebauthnChallengeStore,
+	WebauthnConfig,
+	WebauthnCredentialStore,
+	WebauthnUser,
+} from "./mfa/WebauthnProvider.js";
+export {
+	MemoryWebauthnChallengeStore,
+	MemoryWebauthnCredentialStore,
+	WebauthnProvider,
+} from "./mfa/WebauthnProvider.js";
+export type {
+	RedisBlacklistConfig,
+	RedisLikeClient,
+} from "./RedisBlacklistDriver.js";
+export { RedisBlacklistDriver } from "./RedisBlacklistDriver.js";
 export type {
 	RefreshTokenDriver,
 	StoredRefreshToken,
@@ -56,6 +109,11 @@ export {
 	generateRefreshToken,
 	MemoryRefreshTokenDriver,
 } from "./RefreshTokenStore.js";
+export type {
+	BlacklistDegradeEvent,
+	ResilientBlacklistConfig,
+} from "./ResilientBlacklistDriver.js";
+export { ResilientBlacklistDriver } from "./ResilientBlacklistDriver.js";
 export { MemoryRightsStore } from "./rights/MemoryRightsStore.js";
 export { RightsResolver } from "./rights/RightsResolver.js";
 export type {

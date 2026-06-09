@@ -1,6 +1,7 @@
 import { AuthManager } from "./AuthManager.js";
 import type { WardenConfig } from "./config.js";
 import { WardenError } from "./errors.js";
+import { MfaManager } from "./mfa/MfaManager.js";
 import { MemoryRightsStore } from "./rights/MemoryRightsStore.js";
 import { RightsResolver } from "./rights/RightsResolver.js";
 import { setAuth } from "./services/main.js";
@@ -76,6 +77,16 @@ export default class WardenProvider {
 		this.app.container.singleton("auth", () =>
 			this.app.container.resolve(AuthManager),
 		);
+
+		// MFA (optional): the app builds an MfaManager with its persistent stores
+		// + providers and passes it via config.mfa. Registered by class and under
+		// the "mfa" string alias (same convention as "auth") so controllers and
+		// agnostic consumers can resolve it.
+		const mfa = config.mfa?.manager;
+		if (mfa) {
+			this.app.container.singleton(MfaManager, () => mfa);
+			this.app.container.singleton("mfa", () => mfa);
+		}
 	}
 
 	async boot() {
