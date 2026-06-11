@@ -1,11 +1,13 @@
-import { AuthManager } from "./AuthManager.js";
+import { AuthManager, type AuthStrategy } from "./AuthManager.js";
 import type { WardenConfig } from "./config.js";
 import { WardenError } from "./errors.js";
 import { MfaManager } from "./mfa/MfaManager.js";
 import { MemoryRightsStore } from "./rights/MemoryRightsStore.js";
 import { RightsResolver } from "./rights/RightsResolver.js";
 import { setAuth } from "./services/main.js";
+import { ApiKeyStrategy } from "./strategies/ApiKeyStrategy.js";
 import { JwtStrategy } from "./strategies/JwtStrategy.js";
+import { SessionStrategy } from "./strategies/SessionStrategy.js";
 
 interface WardenContainer {
 	singleton(token: unknown, factory: () => unknown): void;
@@ -36,15 +38,34 @@ export default class WardenProvider {
 		// AuthManager with `strategies: {}` and `defaultStrategy: 'jwt'`,
 		// passing the (then-permissive) constructor and erroring deep in the
 		// middleware loop.
-		if (!config?.jwt) {
+		if (!config?.jwt && !config?.session && !config?.apiKey) {
 			throw new WardenError(
 				"WARDEN_NO_AUTH_CONFIG",
-				`@c9up/warden: no authentication strategies configured. Set config.warden.auth.jwt (or another strategy) in your reamrc.ts before registering WardenProvider.`,
+				`@c9up/warden: no authentication strategies configured. Set at least one of config.warden.auth.jwt / .session / .apiKey in your reamrc.ts before registering WardenProvider.`,
 			);
 		}
 
-		const jwt = new JwtStrategy(config.jwt);
-		this.app.container.singleton(JwtStrategy, () => jwt);
+		// Build the strategy table from whatever the app configured. Each strategy
+		// is also exposed by its class token (mirrors the jwt convention) so apps
+		// can resolve a specific one. The `revoke()` blacklist flows through
+		// `config.jwt.blacklist` into JwtStrategy.
+		const strategies: Record<string, AuthStrategy> = {};
+
+		if (config.jwt) {
+			const jwt = new JwtStrategy(config.jwt);
+			this.app.container.singleton(JwtStrategy, () => jwt);
+			strategies.jwt = jwt;
+		}
+		if (config.session) {
+			const session = new SessionStrategy(config.session);
+			this.app.container.singleton(SessionStrategy, () => session);
+			strategies.session = session;
+		}
+		if (config.apiKey) {
+			const apiKey = new ApiKeyStrategy(config.apiKey);
+			this.app.container.singleton(ApiKeyStrategy, () => apiKey);
+			strategies["api-key"] = apiKey;
+		}
 
 		// Rights layer (Epic 56): one resolver singleton backs BOTH the coarse
 		// RBAC helpers (injected into AuthManager below) and — once 56.6 lands —
@@ -60,10 +81,12 @@ export default class WardenProvider {
 			this.app.container.singleton(MemoryRightsStore, () => rightsStore);
 		}
 
+		// Default to the configured strategy, else the first one registered.
+		const defaultStrategy =
+			config.defaultStrategy ?? Object.keys(strategies)[0];
 		this.app.container.singleton(AuthManager, () => {
-			const strategies: Record<string, JwtStrategy> = { jwt };
 			return new AuthManager({
-				defaultStrategy: config.defaultStrategy ?? "jwt",
+				defaultStrategy,
 				strategies,
 				rights: rightsResolver,
 			});

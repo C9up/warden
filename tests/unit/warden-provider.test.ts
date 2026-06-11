@@ -4,7 +4,9 @@ import { AuthManager, type UserPayload } from "../../src/AuthManager.js";
 import type { WardenConfig } from "../../src/config.js";
 import { MemoryRightsStore } from "../../src/rights/MemoryRightsStore.js";
 import { RightsResolver } from "../../src/rights/RightsResolver.js";
+import { ApiKeyStrategy } from "../../src/strategies/ApiKeyStrategy.js";
 import { JwtStrategy } from "../../src/strategies/JwtStrategy.js";
+import { SessionStrategy } from "../../src/strategies/SessionStrategy.js";
 import WardenProvider, {
 	type WardenAppContext,
 } from "../../src/WardenProvider.js";
@@ -180,6 +182,61 @@ describe("warden > WardenProvider", () => {
 		const user: UserPayload = { id: "u1" };
 		// The grant lives ONLY in the supplied store, proving it backs the resolver.
 		expect(await manager.hasPermission(user, "from.custom.store")).toBe(true);
+	});
+
+	it("registers SessionStrategy under 'session' when config.session is provided", () => {
+		const { container, app } = makeFakeApp({
+			jwt: validJwtConfig,
+			session: {
+				async findUser() {
+					return null;
+				},
+			},
+		});
+		new WardenProvider(app).register();
+
+		expect(container.registry.has(SessionStrategy)).toBe(true);
+		const manager = container.resolve(AuthManager);
+		if (manager instanceof AuthManager) {
+			// Previously @Guard('session') crashed with STRATEGY_NOT_FOUND.
+			expect(() => manager.getStrategy("session")).not.toThrow();
+		}
+	});
+
+	it("registers ApiKeyStrategy under 'api-key' when config.apiKey is provided", () => {
+		const { container, app } = makeFakeApp({
+			jwt: validJwtConfig,
+			apiKey: {
+				async findByKey() {
+					return null;
+				},
+			},
+		});
+		new WardenProvider(app).register();
+
+		expect(container.registry.has(ApiKeyStrategy)).toBe(true);
+		const manager = container.resolve(AuthManager);
+		if (manager instanceof AuthManager) {
+			expect(() => manager.getStrategy("api-key")).not.toThrow();
+		}
+	});
+
+	it("boots a session-only app (no jwt) and defaults to the 'session' strategy", () => {
+		const { container, app } = makeFakeApp({
+			session: {
+				async findUser() {
+					return null;
+				},
+			},
+		});
+		expect(() => new WardenProvider(app).register()).not.toThrow();
+
+		const manager = container.resolve(AuthManager);
+		expect(manager).toBeInstanceOf(AuthManager);
+		if (manager instanceof AuthManager) {
+			expect(() => manager.getStrategy()).not.toThrow(); // default → session
+			expect(() => manager.getStrategy("jwt")).toThrow(); // jwt not configured
+		}
 	});
 
 	it("THROWS WARDEN_NO_AUTH_CONFIG when 'auth' config is entirely absent", () => {

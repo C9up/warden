@@ -18,6 +18,9 @@
 import type { UserPayload } from "./AuthManager.js";
 import type { MfaManager } from "./mfa/MfaManager.js";
 import type { RightsStore } from "./rights/types.js";
+import type { ApiKeyConfig } from "./strategies/ApiKeyStrategy.js";
+import type { SessionStrategyConfig } from "./strategies/SessionStrategy.js";
+import type { TokenBlacklist } from "./TokenBlacklist.js";
 
 export interface JwtConfig {
 	secret: string;
@@ -27,6 +30,12 @@ export interface JwtConfig {
 		email: string,
 		password: string,
 	) => Promise<UserPayload | null>;
+	/**
+	 * Optional revocation list. Supply a `TokenBlacklist` (Memory/Redis-backed) to
+	 * enable `revoke()`/early-rejection of JWTs before expiry. Without it, `revoke()`
+	 * throws (the call would be a silent no-op).
+	 */
+	blacklist?: TokenBlacklist;
 }
 
 export interface WardenConfig {
@@ -34,6 +43,18 @@ export interface WardenConfig {
 	defaultStrategy?: string;
 	/** JWT strategy configuration. */
 	jwt?: JwtConfig;
+	/**
+	 * Session strategy configuration. Supply `findUser` so `@Guard('session')`
+	 * routes resolve the authenticated user from the session id. Without this,
+	 * the `session` strategy is unregistered and `@Guard('session')` throws.
+	 */
+	session?: SessionStrategyConfig;
+	/**
+	 * API-key strategy configuration. Supply `findByKey` so `@Guard('api-key')`
+	 * routes resolve the user (and scopes) from the request header. Without this,
+	 * the `api-key` strategy is unregistered and `@Guard('api-key')` throws.
+	 */
+	apiKey?: ApiKeyConfig;
 	/**
 	 * Rights layer configuration (Epic 56). Supply a custom `store` to back the
 	 * unified resolver with a DB-backed driver; when omitted, an in-memory
