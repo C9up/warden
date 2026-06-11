@@ -75,10 +75,10 @@ export class ResilientBlacklistDriver implements BlacklistDriver {
 
 	async cleanup(): Promise<void> {
 		try {
-			await this.#primary.cleanup();
+			await this.#primary.cleanup?.();
 		} catch (error) {
 			this.#onDegrade({ op: "cleanup", error });
 		}
-		await this.#fallback.cleanup();
+		await this.#fallback.cleanup?.();
 	}
 }

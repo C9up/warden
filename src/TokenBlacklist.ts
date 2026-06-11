@@ -9,7 +9,11 @@
 export interface BlacklistDriver {
 	add(jti: string, expiresAt: number): Promise<void>;
 	has(jti: string): Promise<boolean>;
-	cleanup(): Promise<void>;
+	/**
+	 * Reap expired entries. Optional: TTL-backed stores (Redis/KeyDB) expire keys
+	 * themselves and have nothing to sweep, so they may omit this.
+	 */
+	cleanup?(): Promise<void>;
 }
 
 /** In-memory blacklist for development. */
@@ -51,8 +55,8 @@ export class TokenBlacklist {
 		return this.driver.has(jti);
 	}
 
-	/** Remove expired entries. */
+	/** Remove expired entries (no-op when the driver self-expires via TTL). */
 	async cleanup(): Promise<void> {
-		return this.driver.cleanup();
+		await this.driver.cleanup?.();
 	}
 }
