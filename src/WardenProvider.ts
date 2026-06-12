@@ -2,6 +2,7 @@ import { AuthManager, type AuthStrategy } from "./AuthManager.js";
 import type { WardenConfig } from "./config.js";
 import { WardenError } from "./errors.js";
 import { MfaManager } from "./mfa/MfaManager.js";
+import type { BouncerRegistry } from "./middleware.js";
 import { MemoryRightsStore } from "./rights/MemoryRightsStore.js";
 import { RightsResolver } from "./rights/RightsResolver.js";
 import { setAuth } from "./services/main.js";
@@ -80,6 +81,17 @@ export default class WardenProvider {
 		if (rightsStore instanceof MemoryRightsStore) {
 			this.app.container.singleton(MemoryRightsStore, () => rightsStore);
 		}
+
+		// Bouncer registry (Epic 56.6): the abilities/policies/scope-resolver the
+		// per-request `initializeBouncer` middleware builds each `ctx.bouncer`
+		// from. Registered (even when empty) under a string token so the agnostic
+		// middleware resolves it by name, mirroring the "auth" alias above.
+		const bouncerRegistry: BouncerRegistry = {
+			abilities: config.abilities ?? {},
+			policies: config.policies ?? {},
+			resolveScope: config.resolveScope,
+		};
+		this.app.container.singleton("bouncer:registry", () => bouncerRegistry);
 
 		// Default to the configured strategy, else the first one registered.
 		const defaultStrategy =

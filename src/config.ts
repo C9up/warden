@@ -16,11 +16,23 @@
  */
 
 import type { UserPayload } from "./AuthManager.js";
+import type { BasePolicy } from "./bouncer/BasePolicy.js";
+import type { Ability } from "./bouncer/types.js";
 import type { MfaManager } from "./mfa/MfaManager.js";
-import type { RightsStore } from "./rights/types.js";
+import type { RightsStore, Scope } from "./rights/types.js";
 import type { ApiKeyConfig } from "./strategies/ApiKeyStrategy.js";
 import type { SessionStrategyConfig } from "./strategies/SessionStrategy.js";
 import type { TokenBlacklist } from "./TokenBlacklist.js";
+
+/**
+ * Minimal request shape passed to `resolveScope` — enough to derive a tenant
+ * from a header or the authenticated user, without coupling config to the full
+ * HTTP context type (keeps Warden agnostic of the host framework).
+ */
+export interface ScopeRequestContext {
+	request: { headers: Record<string, string> };
+	auth?: { user?: UserPayload | null };
+}
 
 export interface JwtConfig {
 	secret: string;
@@ -62,6 +74,25 @@ export interface WardenConfig {
 	 * in-memory shipped).
 	 */
 	rights?: { store?: RightsStore };
+	/**
+	 * Standalone abilities the per-request Bouncer knows by name (Epic 56.6).
+	 * Keyed by the string passed to `ctx.bouncer.authorize('post.edit', …)`.
+	 * Define with `Bouncer.ability((user, post) => …)`.
+	 */
+	abilities?: Record<string, Ability<never[]>>;
+	/**
+	 * Class-based policies the per-request Bouncer knows by name (Epic 56.6).
+	 * Reachable via `ctx.bouncer.with('PostPolicy')`. Each entry is the policy
+	 * constructor; a fresh instance is created per check.
+	 */
+	policies?: Record<string, new () => BasePolicy>;
+	/**
+	 * Derive the authorization scope for a request (AD4 — scope-first). Return
+	 * `{ tenant }` to scope rights to a tenant (e.g. from a subdomain or header),
+	 * or `"global"`. Omitted ⇒ every request runs in the implicit `global` scope
+	 * (zero config for single-tenant apps).
+	 */
+	resolveScope?: (ctx: ScopeRequestContext) => Scope | Promise<Scope>;
 	/**
 	 * Multi-factor authentication. Supply a configured `MfaManager` (built with
 	 * your persistent stores + providers) to register it in the container as

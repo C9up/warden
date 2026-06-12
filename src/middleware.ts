@@ -22,12 +22,18 @@ import {
 	type AuthStrategy,
 	sanitizePayload,
 } from "./AuthManager.js";
+import type { BasePolicy } from "./bouncer/BasePolicy.js";
+import { Bouncer } from "./bouncer/Bouncer.js";
+import type { Ability } from "./bouncer/types.js";
+import type { ScopeRequestContext } from "./config.js";
 import {
 	getGuardMetadata,
 	getPermissionMetadata,
 	getRequireMfaMetadata,
 	getRoleMetadata,
 } from "./Guard.js";
+import { RightsResolver } from "./rights/RightsResolver.js";
+import type { Scope } from "./rights/types.js";
 import type { SessionStore } from "./strategies/SessionStrategy.js";
 
 interface StrategyWithContext extends AuthStrategy {
@@ -61,6 +67,8 @@ export interface WardenContext {
 	session?: SessionStore;
 	/** Set by the middleware after successful auth. */
 	auth?: AuthResult;
+	/** Set by `initializeBouncer` — the per-request authorization entry point. */
+	bouncer?: Bouncer;
 	/** The route handler metadata (decorators). */
 	route?: {
 		controller?: object;
@@ -188,6 +196,73 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 	// Auth successful — attach to context and continue.
 	ctx.auth = result;
 	await next();
+}
+
+/**
+ * The abilities/policies/scope-resolver a per-request Bouncer is built from.
+ * Registered once by `WardenProvider` (from `config.auth`) under the container
+ * token `"bouncer:registry"`; read fresh by `initializeBouncer` per request.
+ */
+export interface BouncerRegistry {
+	abilities: Record<string, Ability<never[]>>;
+	policies: Record<string, new () => BasePolicy>;
+	resolveScope?: (ctx: ScopeRequestContext) => Scope | Promise<Scope>;
+}
+
+/**
+ * Bouncer initializer (Epic 56.6) — a GLOBAL middleware (register it for every
+ * route, after `wardenMiddleware`). It builds the per-request {@link Bouncer}
+ * from the authenticated user (`ctx.auth?.user`, or `null` for a guest), the
+ * shared `RightsResolver`, and the registered abilities/policies, then attaches
+ * it as `ctx.bouncer`. Handlers authorize via `await ctx.bouncer.authorize(...)`
+ * (throws `WARDEN_AUTHORIZATION_FAILURE` carrying `status: 403`, which the host's
+ * ExceptionHandler maps to a 403 response) or branch on `ctx.bouncer.allows(...)`.
+ *
+ * Unlike `wardenMiddleware` (a per-route GUARD that short-circuits public
+ * routes), this runs on EVERY request so `ctx.bouncer` is always available —
+ * including for guests — matching AdonisJS's `initialize_bouncer_middleware`.
+ */
+export async function initializeBouncer(ctx: WardenContext, next: WardenNext) {
+	// Both dependencies are registered by WardenProvider. Resolve defensively:
+	// a host that wired the middleware but not the provider gets an empty Bouncer
+	// (no abilities/resolver) rather than a crash on every request.
+	const resolved = tryResolve(ctx, RightsResolver);
+	const resolver = resolved instanceof RightsResolver ? resolved : undefined;
+	const candidate = tryResolve(ctx, "bouncer:registry");
+	const registry = isBouncerRegistry(candidate) ? candidate : undefined;
+
+	const user = ctx.auth?.user ?? null;
+	const scope: Scope = registry?.resolveScope
+		? await registry.resolveScope(ctx)
+		: "global";
+
+	ctx.bouncer = new Bouncer(user, registry?.abilities, registry?.policies, {
+		scope,
+		resolver,
+	});
+	await next();
+}
+
+/** Resolve a container token, returning undefined instead of throwing when absent. */
+function tryResolve(
+	ctx: WardenContext,
+	token: string | (abstract new (...args: never[]) => unknown),
+): unknown {
+	try {
+		return ctx.container.resolve(token);
+	} catch {
+		return undefined;
+	}
+}
+
+/** Structural guard — the registry is a plain object carrying ability/policy tables. */
+function isBouncerRegistry(value: unknown): value is BouncerRegistry {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"abilities" in value &&
+		"policies" in value
+	);
 }
 
 /**
