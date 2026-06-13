@@ -118,4 +118,42 @@ describe("warden > initializeBouncer", () => {
 		await initializeBouncer(ctx, () => {});
 		expect(ctx.bouncer).toBeInstanceOf(Bouncer);
 	});
+
+	// Pinning tests (56.6 code review) — lock the fail-closed security invariants
+	// the Epic 54 retro warned about (a fail-open default once passed 138 tests).
+	it("never silently allows an unknown ability — it throws (fail-closed)", async () => {
+		const { ctx } = buildCtx({ user: { id: "u1" }, registry });
+		await initializeBouncer(ctx, () => {});
+		await expect(ctx.bouncer?.allows("does.not.exist")).rejects.toMatchObject({
+			code: "WARDEN_UNKNOWN_ABILITY",
+		});
+	});
+
+	it("denies a guest on a non-guest ability via authorize (403)", async () => {
+		const { ctx } = buildCtx({ registry });
+		await initializeBouncer(ctx, () => {});
+		await expect(
+			ctx.bouncer?.authorize("post.edit", { ownerId: "u1" }),
+		).rejects.toMatchObject({
+			code: "WARDEN_AUTHORIZATION_FAILURE",
+			status: 403,
+		});
+	});
+
+	it("fails closed when resolveScope throws — request blocked, no Bouncer", async () => {
+		const scoped: BouncerRegistry = {
+			...registry,
+			resolveScope: (): Scope => {
+				throw new Error("scope resolution boom");
+			},
+		};
+		const { ctx, next } = buildCtx({ user: { id: "u1" }, registry: scoped });
+		await expect(
+			initializeBouncer(ctx, () => {
+				next.called = true;
+			}),
+		).rejects.toThrow();
+		expect(next.called).toBe(false);
+		expect(ctx.bouncer).toBeUndefined();
+	});
 });
