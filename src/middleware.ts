@@ -172,7 +172,14 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 	// bypass permission checks. This is the strictest model — callers who want
 	// role-OR-permission semantics should use a custom guard instead.
 	if (controller && action) {
-		const denied = await checkAuthorization(auth, user, controller, action);
+		const scope = await resolveRequestScope(ctx);
+		const denied = await checkAuthorization(
+			auth,
+			user,
+			controller,
+			action,
+			scope,
+		);
 		if (denied) {
 			ctx.response.status(403);
 			ctx.response.json({ error: { code: "FORBIDDEN", message: denied } });
@@ -266,6 +273,18 @@ function isBouncerRegistry(value: unknown): value is BouncerRegistry {
 }
 
 /**
+ * Resolve the request's authorization scope from the registry's `resolveScope`
+ * hook (default `"global"`). Shared so the @Role/@Permission decorator gate and
+ * the Bouncer path evaluate in the SAME scope — without this the decorator path
+ * hardcoded "global" and tenant-scoped roles/grants never satisfied @Role/@Permission.
+ */
+async function resolveRequestScope(ctx: WardenContext): Promise<Scope> {
+	const candidate = tryResolve(ctx, "bouncer:registry");
+	const registry = isBouncerRegistry(candidate) ? candidate : undefined;
+	return registry?.resolveScope ? await registry.resolveScope(ctx) : "global";
+}
+
+/**
  * Try each declared strategy in order — session strategies via
  * `verifyWithContext()`, others via `verify(token)` with native-first credential
  * fallback. Distinguishes crashes (strategy threw / `strategyCrash`) from
@@ -353,13 +372,14 @@ async function checkAuthorization(
 	user: NonNullable<AuthResult["user"]>,
 	controller: object,
 	action: string | symbol,
+	scope: Scope,
 ): Promise<string | null> {
 	const requiredPermissions = getPermissionMetadata(controller, action);
 	const requiredRoles = getRoleMetadata(controller, action);
 	if (requiredPermissions.length === 0 && requiredRoles.length === 0) {
 		return null;
 	}
-	const effective = await auth.resolvePermissions(user, "global");
+	const effective = await auth.resolvePermissions(user, scope);
 	if (requiredPermissions.length > 0) {
 		const missing = requiredPermissions.filter((p) => !effective.has(p));
 		if (missing.length > 0) return `Missing permissions: ${missing.join(", ")}`;

@@ -9,6 +9,7 @@ import { Guard, Permission, Role } from "../../src/Guard.js";
 import { type WardenContext, wardenMiddleware } from "../../src/middleware.js";
 import { MemoryRightsStore } from "../../src/rights/MemoryRightsStore.js";
 import { RightsResolver } from "../../src/rights/RightsResolver.js";
+import type { Scope } from "../../src/rights/types.js";
 
 interface RecordedResponse {
 	status?: number;
@@ -21,6 +22,11 @@ interface BuildCtxOpts {
 	controller?: object;
 	action?: string | symbol;
 	session?: WardenContext["session"];
+	registry?: {
+		abilities: Record<string, unknown>;
+		policies: Record<string, unknown>;
+		resolveScope?: (ctx: WardenContext) => Scope | Promise<Scope>;
+	};
 }
 
 function buildCtx(opts: BuildCtxOpts): {
@@ -52,6 +58,7 @@ function buildCtx(opts: BuildCtxOpts): {
 		container: {
 			resolve(token) {
 				if (token === AuthManager) return opts.manager;
+				if (token === "bouncer:registry" && opts.registry) return opts.registry;
 				throw new Error(`unexpected token: ${String(token)}`);
 			},
 		},
@@ -702,6 +709,38 @@ describe("warden > wardenMiddleware — permission and role checks", () => {
 			controller: C.prototype,
 			action: "handler",
 			headers: { authorization: "Bearer ok" },
+		});
+
+		await wardenMiddleware(ctx, next.fn);
+		expect(next.called).toBe(true);
+	});
+
+	it("@Permission gate resolves at the registry-resolved tenant scope, not hardcoded global (audit 2026-06-13)", async () => {
+		class C {
+			@Guard("jwt")
+			@Permission("orders.read")
+			async handler() {}
+		}
+		// orders.read is granted ONLY at tenant:acme (NOT global). Pre-fix the gate
+		// resolved "global" → empty set → 403; honoring resolveScope it must pass.
+		const store = new MemoryRightsStore()
+			.defineRole("reader", ["orders.read"], { tenant: "acme" })
+			.assignRole("u1", "reader", { tenant: "acme" });
+		const manager = new AuthManager({
+			defaultStrategy: "jwt",
+			strategies: { jwt: acceptStrategy },
+			rights: new RightsResolver(store),
+		});
+		const { ctx, next } = buildCtx({
+			manager,
+			controller: C.prototype,
+			action: "handler",
+			headers: { authorization: "Bearer ok" },
+			registry: {
+				abilities: {},
+				policies: {},
+				resolveScope: () => ({ tenant: "acme" }),
+			},
 		});
 
 		await wardenMiddleware(ctx, next.fn);
