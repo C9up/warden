@@ -20,10 +20,13 @@
 import {
 	AuthManager,
 	type AuthResult,
+	type AuthStrategy,
 	type UserPayload,
 } from "./AuthManager.js";
 import type { WardenConfig } from "./config.js";
+import { ApiKeyStrategy } from "./strategies/ApiKeyStrategy.js";
 import { JwtStrategy } from "./strategies/JwtStrategy.js";
+import { SessionStrategy } from "./strategies/SessionStrategy.js";
 
 export interface Warden {
 	/** Verify a bearer token. Returns auth result with user payload. */
@@ -49,10 +52,20 @@ export interface Warden {
  * Create a standalone Warden instance — no Ream container needed.
  */
 export function createWarden(config: WardenConfig): Warden {
-	const strategies: Record<string, JwtStrategy> = {};
+	// Mirror WardenProvider: build EVERY configured strategy, not just jwt —
+	// otherwise config.session / config.apiKey were silently dropped and a
+	// jwt-less config (e.g. { defaultStrategy: 'api-key', apiKey }) threw
+	// INVALID_CONFIG at boot (audit 2026-06-13). Keys match the @Guard names.
+	const strategies: Record<string, AuthStrategy> = {};
 
 	if (config.jwt) {
 		strategies.jwt = new JwtStrategy(config.jwt);
+	}
+	if (config.session) {
+		strategies.session = new SessionStrategy(config.session);
+	}
+	if (config.apiKey) {
+		strategies["api-key"] = new ApiKeyStrategy(config.apiKey);
 	}
 
 	const manager = new AuthManager({

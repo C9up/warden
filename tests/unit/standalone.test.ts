@@ -120,6 +120,26 @@ describe("warden > createWarden", () => {
 		const result = await warden.verify("not-a-real-jwt");
 		expect(result.authenticated).toBe(false);
 	});
+
+	it("wires the api-key strategy from config.apiKey (jwt-less config doesn't throw)", async () => {
+		// Before the fix only config.jwt was wired, so this jwt-less config threw
+		// AuthManager INVALID_CONFIG at construction (audit 2026-06-13).
+		const warden = createWarden({
+			defaultStrategy: "api-key",
+			apiKey: {
+				async findByKey(key: string) {
+					return key === "secret-key"
+						? { user: { id: "u1" }, scopes: ["orders.read"] }
+						: null;
+				},
+			},
+		});
+		const ok = await warden.verify("secret-key", "api-key");
+		expect(ok.authenticated).toBe(true);
+		expect(ok.user?.id).toBe("u1");
+		const bad = await warden.verify("wrong", "api-key");
+		expect(bad.authenticated).toBe(false);
+	});
 });
 
 describe("warden > expressMiddleware", () => {
