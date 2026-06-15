@@ -45,7 +45,20 @@ export class ApiKeyStrategy implements AuthStrategy {
 
 		const user: UserPayload = { ...result.user };
 		if (result.scopes && result.scopes.length > 0) {
-			// Merge scopes into permissions without mutating source object.
+			// Expose the API key's scopes on `user.permissions` (without mutating
+			// the source object) so APP code can read them via
+			// `ctx.auth.user.permissions`.
+			//
+			// IMPORTANT — these scopes are a SEPARATE axis from the `@Permission`
+			// route gate, by design (Adonis Bouncer parity): the gate flows through
+			// RightsResolver, which resolves grants from the rights STORE and
+			// deliberately ignores payload-carried permissions (see RightsResolver
+			// D1). This mirrors AdonisJS, where token abilities are checked via
+			// `currentAccessToken.allows(scope)` and are NOT consulted by Bouncer
+			// ability/policy checks. So an API key carrying `orders.create` is NOT
+			// auto-granted by `@Permission('orders.create')` — that's intentional,
+			// not a bug. Gate API-key routes on scopes with an explicit app-level
+			// check against `ctx.auth.user.permissions`.
 			const merged = new Set([...(user.permissions ?? []), ...result.scopes]);
 			user.permissions = [...merged];
 		}
