@@ -27,6 +27,7 @@ class OrderController {
 - Multi-strategy AuthManager (JWT, session, API key, OAuth)
 - `@Guard()`, `@Permission()`, `@Role()` decorators
 - RBAC: `hasRole`, `hasPermission`, `hasAllPermissions`
+- Unified authorization: Bouncer-shaped abilities & policies over one resolver — RBAC + ACL + ownership + multi-tenant scope, zero `@adonisjs/bouncer` dependency
 - Strategy exception safety (catch → AuthResult)
 - Runtime strategy registration
 - **Multi-factor authentication** — TOTP, backup codes, email/SMS OTP, WebAuthn/passkeys, all dependency-free

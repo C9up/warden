@@ -114,4 +114,75 @@ describe("warden > bouncer > parity (AC-E2)", () => {
 		await new Bouncer(null).with(OrderPolicy).execute("act");
 		expect(trace).toEqual(["before", "after"]);
 	});
+
+	it("an async ability callback is awaited for both allow and deny", async () => {
+		// context7 `/adonisjs/bouncer` (re-verified 2026-06-12):
+		// `Bouncer.ability(async (user, post) => …)` — a predicate may be async
+		// (e.g. a DB-backed check) and is awaited before the verdict is read.
+		const asyncAllow = Bouncer.ability(
+			async (current) => current.id === "owner",
+		);
+		const asyncDeny = Bouncer.ability(async () =>
+			AuthorizationResponse.deny("async nope", 409),
+		);
+
+		expect(await new Bouncer(owner).allows(asyncAllow)).toBe(true);
+		// A non-owner must be DENIED — this is the assertion that actually bites a
+		// missing `await`: an unawaited Promise is truthy, so without the await this
+		// would wrongly allow the intruder.
+		expect(await new Bouncer({ id: "intruder" }).allows(asyncAllow)).toBe(
+			false,
+		);
+		const denied = await new Bouncer(owner).execute(asyncDeny);
+		expect(denied.authorized).toBe(false);
+		expect(denied.status).toBe(409);
+		expect(denied.message).toBe("async nope");
+	});
+
+	it("allowGuest runs the callback for a guest but the predicate still decides", async () => {
+		// context7 `/adonisjs/bouncer` (re-verified 2026-06-12):
+		// `@allowGuest view(user, post) { return post.isPublished }` — allowGuest
+		// bypasses the guest-deny GATE, it is NOT an auto-allow; the callback's
+		// verdict stands, so a guest passes only when the predicate is true.
+		const viewable = Bouncer.ability(
+			{ allowGuest: true },
+			(_current, isPublished: boolean) => isPublished,
+		);
+
+		expect(await new Bouncer(null).allows(viewable, true)).toBe(true);
+		expect(await new Bouncer(null).allows(viewable, false)).toBe(false);
+	});
+
+	it("after overrides a before short-circuit — the action is skipped, after wins", async () => {
+		// context7 `/adonisjs/bouncer` (re-verified 2026-06-12): before short-
+		// circuits the action with a non-undefined return; after still runs and may
+		// override that result. Here before allows, the action never runs, and after
+		// flips it to a deny — after has the last word over a before short-circuit.
+		let actionRan = false;
+		class FinalSayPolicy extends BasePolicy {
+			override before(): HookResponse {
+				return true;
+			}
+
+			override after(
+				_current: UserPayload | null,
+				_name: string,
+				_result: AuthorizationResponse,
+			): HookResponse {
+				return AuthorizationResponse.deny("vetoed", 403);
+			}
+
+			act(): boolean {
+				actionRan = true;
+				return true;
+			}
+		}
+
+		const response = await new Bouncer(owner)
+			.with(FinalSayPolicy)
+			.execute("act");
+		expect(response.authorized).toBe(false);
+		expect(response.message).toBe("vetoed");
+		expect(actionRan).toBe(false);
+	});
 });
