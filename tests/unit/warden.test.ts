@@ -1,6 +1,6 @@
 import "reflect-metadata";
 import { describe, expect, it } from "vitest";
-import type { AuthStrategy, UserPayload } from "../../src/index.js";
+import type { AuthStrategy, JwtClaims, UserPayload } from "../../src/index.js";
 import {
 	ApiKeyStrategy,
 	AuthManager,
@@ -258,6 +258,40 @@ describe("warden > security hardening", () => {
 
 		const result = await jwt.verify(token);
 		expect(result.authenticated).toBe(false);
+	});
+
+	it("JwtStrategy passes the full verified claims (sub/iat/jti) to findUser", async () => {
+		let seen: JwtClaims | undefined;
+		const jwt = new JwtStrategy({
+			secret: "x".repeat(32),
+			findUser: async (id, claims) => {
+				seen = claims;
+				return { id };
+			},
+			verifyCredentials: async () => null,
+		});
+		const token = jwt.signToken({ id: "u1" });
+		const res = await jwt.verify(token);
+		expect(res.authenticated).toBe(true);
+		expect(seen?.sub).toBe("u1");
+		expect(typeof seen?.iat).toBe("number");
+		expect(typeof seen?.jti).toBe("string");
+	});
+
+	it("findUser can reject a stale token via claims (iat < passwordChangedAt) — session invalidation", async () => {
+		// Simulate "password changed after this token was issued": the app
+		// compares the token's iat to a stored passwordChangedAt and rejects.
+		// Before claims were passed to findUser this was impossible (audit 2026-06-15).
+		const passwordChangedAt = Math.floor(Date.now() / 1000) + 1000;
+		const jwt = new JwtStrategy({
+			secret: "x".repeat(32),
+			findUser: async (id, claims) =>
+				claims.iat < passwordChangedAt ? null : { id },
+			verifyCredentials: async () => null,
+		});
+		const token = jwt.signToken({ id: "u1" }); // iat = now < passwordChangedAt
+		const res = await jwt.verify(token);
+		expect(res.authenticated).toBe(false);
 	});
 
 	it("JwtStrategy.revoke makes a previously-valid token unverifiable", async () => {

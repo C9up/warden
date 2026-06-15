@@ -124,7 +124,7 @@ export type {
 export { scopeKey } from "./rights/types.js";
 export type { ApiKeyConfig } from "./strategies/ApiKeyStrategy.js";
 export { ApiKeyStrategy } from "./strategies/ApiKeyStrategy.js";
-export type { JwtStrategyConfig } from "./strategies/JwtStrategy.js";
+export type { JwtClaims, JwtStrategyConfig } from "./strategies/JwtStrategy.js";
 export { generateJwtSecret, JwtStrategy } from "./strategies/JwtStrategy.js";
 export type {
 	SessionStore,

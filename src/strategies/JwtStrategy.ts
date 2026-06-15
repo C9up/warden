@@ -8,7 +8,13 @@ import type { AuthResult, AuthStrategy, UserPayload } from "../AuthManager.js";
 import { nativeWarden } from "../native.js";
 import type { TokenBlacklist } from "../TokenBlacklist.js";
 
-interface JwtPayloadData {
+/**
+ * The verified JWT claims. Passed to `findUser` as the second argument so an app
+ * can reject a token on more than `sub` — e.g. compare `iat` to a stored
+ * `passwordChangedAt` (kill sessions on reset), check a `tokenVersion` custom
+ * claim, or honour the `jti` directly. Return `null` from `findUser` to reject.
+ */
+export interface JwtClaims {
 	sub: string;
 	roles?: string[];
 	permissions?: string[];
@@ -19,7 +25,7 @@ interface JwtPayloadData {
 	[key: string]: unknown;
 }
 
-function sign(payload: JwtPayloadData, secret: string): string {
+function sign(payload: JwtClaims, secret: string): string {
 	const rust = nativeWarden();
 	if (!rust) {
 		throw new Error(
@@ -29,7 +35,7 @@ function sign(payload: JwtPayloadData, secret: string): string {
 	return rust.jwtSign(JSON.stringify(payload), secret);
 }
 
-function verify(token: string, secret: string): JwtPayloadData | null {
+function verify(token: string, secret: string): JwtClaims | null {
 	const rust = nativeWarden();
 	if (!rust) {
 		throw new Error(
@@ -38,7 +44,7 @@ function verify(token: string, secret: string): JwtPayloadData | null {
 	}
 	try {
 		const payloadJson = rust.jwtVerify(token, secret);
-		const payload = JSON.parse(payloadJson) as JwtPayloadData;
+		const payload = JSON.parse(payloadJson) as JwtClaims;
 		if (typeof payload.sub !== "string" || !payload.sub) return null;
 		return payload;
 	} catch {
@@ -61,7 +67,15 @@ export interface JwtStrategyConfig {
 	 */
 	previousSecrets?: readonly string[];
 	expiresInSeconds?: number;
-	findUser: (id: string) => Promise<UserPayload | null>;
+	/**
+	 * Resolve the user for a verified token. Receives the token `sub` AND the
+	 * full verified `claims` — use the claims to enforce session invalidation
+	 * the strategy can't know about (e.g. reject when `claims.iat` predates the
+	 * user's `passwordChangedAt`, or a `claims.tokenVersion` is stale) by
+	 * returning `null`. The second arg is optional for callers that only need
+	 * the id (existing one-arg `findUser` functions stay valid).
+	 */
+	findUser: (id: string, claims: JwtClaims) => Promise<UserPayload | null>;
 	verifyCredentials: (
 		email: string,
 		password: string,
@@ -113,7 +127,7 @@ export class JwtStrategy implements AuthStrategy {
 	 * Returns `null` when no secret accepts the token — same semantics as
 	 * the single-secret path so callers see "invalid or expired token".
 	 */
-	#verifyWithRotation(token: string): JwtPayloadData | null {
+	#verifyWithRotation(token: string): JwtClaims | null {
 		for (const secret of this.#verifySecrets) {
 			const payload = verify(token, secret);
 			if (payload) return payload;
@@ -165,7 +179,10 @@ export class JwtStrategy implements AuthStrategy {
 			}
 		}
 
-		const user = await this.#findUser(payload.sub);
+		// Pass the FULL verified claims (not just `sub`) so the app can reject
+		// stale tokens it alone can judge — iat vs passwordChangedAt, tokenVersion,
+		// etc. — by returning null. This is the session-invalidation seam.
+		const user = await this.#findUser(payload.sub, payload);
 		if (!user) {
 			return { authenticated: false, error: "User not found" };
 		}
