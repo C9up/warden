@@ -49,6 +49,22 @@ export interface AuthConfig {
 	rights?: RightsResolver;
 }
 
+/** A strategy that can mint a token for a resolved user (e.g. JwtStrategy). */
+interface TokenIssuer {
+	signToken(user: UserPayload): string;
+}
+
+/**
+ * Capability check for {@link AuthManager.issueFor}. `signToken` is not on the
+ * `AuthStrategy` interface (only token-minting strategies have it), so narrow
+ * via `in` + `typeof` — no cast.
+ */
+function isTokenIssuer(
+	strategy: AuthStrategy,
+): strategy is AuthStrategy & TokenIssuer {
+	return "signToken" in strategy && typeof strategy.signToken === "function";
+}
+
 /**
  * Manages authentication strategies and provides guard/permission checks.
  */
@@ -129,6 +145,32 @@ export class AuthManager {
 				strategyCrash: true,
 			};
 		}
+	}
+
+	/**
+	 * Mint a token for an ALREADY-resolved user — the "login-as-known-user"
+	 * path (e.g. straight after signup created the row in the app's own
+	 * transaction). Skips the credential check `authenticate()` performs, so no
+	 * redundant bcrypt / DB lookup, and the app never has to reach into the
+	 * strategy internals.
+	 *
+	 * The token is byte-for-byte what `authenticate()` would emit for the same
+	 * `user` (it delegates to the same `signToken`), so the claims — sub / roles
+	 * / permissions / iat / exp / jti — are identical. Throws if the resolved
+	 * strategy can't issue tokens (e.g. session / API-key strategies).
+	 */
+	issueFor(user: UserPayload, strategyName?: string): string {
+		const strategy = this.getStrategy(strategyName);
+		if (!isTokenIssuer(strategy)) {
+			throw new WardenError(
+				"STRATEGY_CANNOT_ISSUE",
+				`Auth strategy '${strategyName ?? this.defaultStrategy}' cannot issue tokens.`,
+				{
+					hint: "issueFor() needs a token-minting strategy (e.g. JwtStrategy with signToken). Session / API-key strategies don't mint tokens.",
+				},
+			);
+		}
+		return strategy.signToken(user);
 	}
 
 	/**

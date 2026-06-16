@@ -480,3 +480,63 @@ describe("warden > security hardening", () => {
 		expect(limiter.check("127.0.0.1", "USER@example.com")).toBe(false);
 	});
 });
+
+describe("warden > AuthManager.issueFor", () => {
+	function claims(token: string): Record<string, unknown> {
+		const part = token.split(".")[1];
+		return JSON.parse(Buffer.from(part, "base64url").toString());
+	}
+
+	const user: UserPayload = {
+		id: "u1",
+		roles: ["admin"],
+		permissions: ["posts:write"],
+	};
+
+	it("mints a token whose claims match the authenticate() path (no bcrypt)", async () => {
+		const jwt = new JwtStrategy({
+			secret: "x".repeat(32),
+			findUser: async (id) => ({ id }),
+			// authenticate() resolves the same user via verifyCredentials
+			verifyCredentials: async () => user,
+		});
+		const mgr = new AuthManager({
+			defaultStrategy: "jwt",
+			strategies: { jwt },
+		});
+
+		const issued = mgr.issueFor(user);
+		const authed = await mgr.authenticate({
+			email: "a@b.com",
+			password: "pw",
+		});
+
+		// Same claim SHAPE as authenticate() (iat/jti differ per call).
+		const i = claims(issued);
+		const a = claims(authed.user?.token as string);
+		expect(i.sub).toBe("u1");
+		expect(i.roles).toEqual(["admin"]);
+		expect(i.permissions).toEqual(["posts:write"]);
+		expect(i.sub).toBe(a.sub);
+		expect(i.roles).toEqual(a.roles);
+		expect(i.permissions).toEqual(a.permissions);
+
+		// And the minted token actually verifies.
+		const verified = await mgr.verify(issued);
+		expect(verified.authenticated).toBe(true);
+		expect(verified.user?.id).toBe("u1");
+	});
+
+	it("throws STRATEGY_CANNOT_ISSUE for a strategy that can't mint tokens", () => {
+		const fake: AuthStrategy = {
+			name: "fake",
+			authenticate: async () => ({ authenticated: false }),
+			verify: async () => ({ authenticated: false }),
+		};
+		const mgr = new AuthManager({
+			defaultStrategy: "fake",
+			strategies: { fake },
+		});
+		expect(() => mgr.issueFor(user)).toThrow(/cannot issue tokens/);
+	});
+});
