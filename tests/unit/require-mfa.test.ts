@@ -40,11 +40,12 @@ function managerReturning(user: UserPayload): AuthManager {
 function run(manager: AuthManager) {
 	const response: { status?: number; body?: unknown } = {};
 	const state = { nextCalled: false };
+	// The middleware resolves AuthManager from `ctx.containerResolver` (Ream's
+	// per-request IoC resolver), NOT from a `@c9up/ream` import — keeps the test
+	// agnostic and standalone.
 	const ctx: WardenContext = {
 		request: {
-			method: "POST",
-			url: "/api/transfer",
-			headers: { authorization: "Bearer tok" },
+			headers: () => ({ authorization: "Bearer tok" }),
 		},
 		response: {
 			status(code) {
@@ -54,14 +55,15 @@ function run(manager: AuthManager) {
 				response.body = data;
 			},
 		},
-		container: {
-			resolve(token) {
+		session: undefined,
+		controller: SensitiveController.prototype,
+		action: "transfer",
+		containerResolver: {
+			make(token) {
 				if (token === AuthManager) return manager;
-				throw new Error(`unexpected token: ${String(token)}`);
+				throw new Error(`No binding for ${String(token)}`);
 			},
 		},
-		session: undefined,
-		route: { controller: SensitiveController.prototype, action: "transfer" },
 	};
 	return {
 		exec: () =>

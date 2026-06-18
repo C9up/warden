@@ -29,24 +29,27 @@ function buildCtx(opts: {
 	registry?: BouncerRegistry;
 	resolver?: RightsResolver;
 }): { ctx: WardenContext; next: { called: boolean } } {
+	// initializeBouncer resolves RightsResolver / "bouncer:registry" from
+	// `ctx.containerResolver` (Ream's per-request IoC resolver) — NOT from a
+	// `@c9up/ream` import. Wire only what the test provides into a fake resolver;
+	// an unbound token throws and the middleware falls back to its defensive
+	// path. A fresh resolver per call ⇒ no cross-test leakage.
+	const bindings = new Map<unknown, unknown>();
+	if (opts.resolver) bindings.set(RightsResolver, opts.resolver);
+	if (opts.registry) bindings.set("bouncer:registry", opts.registry);
+	const containerResolver: WardenContext["containerResolver"] = {
+		make(token) {
+			if (bindings.has(token)) return bindings.get(token);
+			throw new Error(`No binding for ${String(token)}`);
+		},
+	};
+
 	const next = { called: false };
 	const ctx: WardenContext = {
-		request: { method: "GET", url: "/", headers: {} },
+		request: { headers: () => ({}) },
 		response: { status() {}, json() {} },
-		container: {
-			resolve(token) {
-				if (token === RightsResolver) {
-					if (opts.resolver) return opts.resolver;
-					throw new Error("no resolver");
-				}
-				if (token === "bouncer:registry") {
-					if (opts.registry) return opts.registry;
-					throw new Error("no registry");
-				}
-				throw new Error(`unexpected token: ${String(token)}`);
-			},
-		},
 		auth: opts.user ? { authenticated: true, user: opts.user } : undefined,
+		containerResolver,
 	};
 	return { ctx, next };
 }

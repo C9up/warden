@@ -6,7 +6,10 @@ import {
 	type AuthStrategy,
 } from "../../src/AuthManager.js";
 import { Guard, Permission, Role } from "../../src/Guard.js";
-import { type WardenContext, wardenMiddleware } from "../../src/middleware.js";
+import WardenMiddleware, {
+	type WardenContext,
+	wardenMiddleware,
+} from "../../src/middleware.js";
 import { MemoryRightsStore } from "../../src/rights/MemoryRightsStore.js";
 import { RightsResolver } from "../../src/rights/RightsResolver.js";
 import type { Scope } from "../../src/rights/types.js";
@@ -34,6 +37,22 @@ function buildCtx(opts: BuildCtxOpts): {
 	response: RecordedResponse;
 	next: { called: boolean; fn: () => void };
 } {
+	// The middleware resolves AuthManager (+ optional bouncer:registry) from
+	// `ctx.containerResolver` (Ream's per-request IoC resolver) — NOT from a
+	// `@c9up/ream` import. Wire this test's instances into a fake resolver so
+	// warden's tests stay agnostic and run standalone (no peer install needed).
+	const bindings = new Map<unknown, unknown>();
+	bindings.set(AuthManager, opts.manager);
+	if (opts.registry) bindings.set("bouncer:registry", opts.registry);
+	const containerResolver: WardenContext["containerResolver"] = {
+		make(token) {
+			if (bindings.has(token)) return bindings.get(token);
+			// Mirror Ream's container: an unbound token throws (warden catches
+			// and treats it as "not registered").
+			throw new Error(`No binding for ${String(token)}`);
+		},
+	};
+
 	const response: RecordedResponse = {};
 	const next = {
 		called: false,
@@ -41,11 +60,10 @@ function buildCtx(opts: BuildCtxOpts): {
 			next.called = true;
 		},
 	};
+	const headers = opts.headers ?? {};
 	const ctx: WardenContext = {
 		request: {
-			method: "GET",
-			url: "/api/protected",
-			headers: opts.headers ?? {},
+			headers: () => headers,
 		},
 		response: {
 			status(code) {
@@ -55,18 +73,11 @@ function buildCtx(opts: BuildCtxOpts): {
 				response.body = data;
 			},
 		},
-		container: {
-			resolve(token) {
-				if (token === AuthManager) return opts.manager;
-				if (token === "bouncer:registry" && opts.registry) return opts.registry;
-				throw new Error(`unexpected token: ${String(token)}`);
-			},
-		},
+		// Ream populates controller/action top-level on the HttpContext.
+		controller: opts.controller,
+		action: opts.action,
 		session: opts.session,
-		route:
-			opts.controller || opts.action
-				? { controller: opts.controller, action: opts.action }
-				: undefined,
+		containerResolver,
 	};
 	return { ctx, response, next };
 }
@@ -858,5 +869,34 @@ describe("warden > wardenMiddleware — permission and role checks", () => {
 
 		await wardenMiddleware(ctx, () => {});
 		expect(response.status).toBe(403);
+	});
+});
+
+describe("warden > Ream ctx integration (regression)", () => {
+	class SecureController {
+		@Guard("jwt")
+		secret() {}
+	}
+
+	it("default export is a class with handle() — Ream lazy router.use resolver", () => {
+		// Ream does `new mod.default().handle(ctx, next)` for the documented
+		// router.use([() => import('@c9up/warden/middleware')]) form.
+		expect(typeof WardenMiddleware).toBe("function");
+		expect(typeof new WardenMiddleware().handle).toBe("function");
+	});
+
+	it("enforces a guarded route read from ctx.controller/action — no fail-open", async () => {
+		// SECURITY: guard metadata must come from ctx.controller/ctx.action (Ream's
+		// shape). If misread, getGuardMetadata returns [] → route treated as public
+		// → auth bypass. A guarded route with no token must 401, not pass through.
+		const { ctx, response, next } = buildCtx({
+			manager: makeManager({}),
+			controller: SecureController.prototype,
+			action: "secret",
+			headers: {},
+		});
+		await wardenMiddleware(ctx, next.fn);
+		expect(next.called).toBe(false);
+		expect(response.status).toBe(401);
 	});
 });

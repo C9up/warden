@@ -26,6 +26,7 @@ import type { BasePolicy } from "./bouncer/BasePolicy.js";
 import { Bouncer } from "./bouncer/Bouncer.js";
 import type { Ability } from "./bouncer/types.js";
 import type { ScopeRequestContext } from "./config.js";
+import { WardenError } from "./errors.js";
 import {
 	getGuardMetadata,
 	getPermissionMetadata,
@@ -48,32 +49,79 @@ function hasVerifyWithContext(
 	);
 }
 
+/**
+ * Tokens warden resolves from the container: a service class, or a string/symbol
+ * alias (`"bouncer:registry"`). Mirrors Ream's `ServiceToken` without importing
+ * it — warden declares the shape so it stays framework-agnostic.
+ */
+type ResolvableToken =
+	| string
+	| symbol
+	| (abstract new (...args: never[]) => unknown);
+
+/**
+ * Per-request IoC resolver Ream exposes as `ctx.containerResolver` (Adonis
+ * idiom). Warden resolves AuthManager / RightsResolver / the bouncer registry
+ * through this — reading from the context it is HANDED — so the package never
+ * imports `@c9up/ream` at runtime. A host that provides none (non-Ream, or a
+ * misconfigured kernel) yields no resolution: guarded routes fail CLOSED.
+ */
+interface ContainerResolver {
+	make(token: ResolvableToken): unknown;
+}
+
 export interface WardenContext {
 	request: {
-		method: string;
-		url: string;
-		headers: Record<string, string>;
+		/** Ream's `HttpContext` exposes headers as a METHOD, not a property. */
+		headers(): Record<string, string>;
 	};
+	/**
+	 * Per-request IoC resolver (Ream's `ctx.containerResolver`). Warden resolves
+	 * AuthManager + the bouncer registry through it — agnostic, no `@c9up/ream`
+	 * import. Absent on a non-Ream host → guarded routes fail closed.
+	 */
+	containerResolver?: ContainerResolver;
 	response: {
-		status: (code: number) => void;
+		status: (code: number) => unknown;
 		json: (data: unknown) => void;
 	};
-	container: {
-		resolve: (
-			key: string | symbol | (abstract new (...args: never[]) => unknown),
-		) => unknown;
-	};
+	/**
+	 * Controller prototype + method that own the route — Ream populates these
+	 * top-level on the `HttpContext` (from `match.route.controller`). Absent for
+	 * inline-function routes. Read by the guard-metadata lookup.
+	 */
+	controller?: object;
+	action?: string | symbol;
 	/** Session store — set by a session middleware upstream. */
 	session?: SessionStore;
-	/** Set by the middleware after successful auth. */
+	/** Set by the middleware after successful auth (Ream's `auth` slot). */
 	auth?: AuthResult;
 	/** Set by `initializeBouncer` — the per-request authorization entry point. */
 	bouncer?: Bouncer;
-	/** The route handler metadata (decorators). */
-	route?: {
-		controller?: object;
-		action?: string | symbol;
-	};
+}
+
+/**
+ * Resolve a token from the request's IoC resolver (`ctx.containerResolver`,
+ * Adonis idiom). Returns undefined when no resolver is present or the token is
+ * unbound — callers decide fail-open (the bouncer registry) vs fail-closed (the
+ * AuthManager gate in `wardenMiddleware`). No `@c9up/ream` import: warden reads
+ * only from the context Ream hands it.
+ */
+function resolveFromCtx(ctx: WardenContext, token: ResolvableToken): unknown {
+	try {
+		return ctx.containerResolver?.make(token);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Bridge Ream's ctx to the `resolveScope` hook's `ScopeRequestContext`, which
+ * takes headers as a plain object (a snapshot) — keeps the app-facing hook
+ * contract stable while warden reads Ream's `headers()` method internally.
+ */
+function toScopeContext(ctx: WardenContext): ScopeRequestContext {
+	return { request: { headers: ctx.request.headers() }, auth: ctx.auth };
 }
 
 type WardenNext = () => Promise<void> | void;
@@ -84,11 +132,22 @@ type WardenNext = () => Promise<void> | void;
  * and authenticates + authorizes the request.
  */
 export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
-	const auth = ctx.container.resolve(AuthManager) as AuthManager;
+	const resolvedAuth = resolveFromCtx(ctx, AuthManager);
+	if (!(resolvedAuth instanceof AuthManager)) {
+		// Fail CLOSED — a missing AuthManager (WardenProvider not registered, or
+		// no `ctx.containerResolver` on a non-Ream host) must never silently let
+		// a guarded request through.
+		throw new WardenError(
+			"AUTH_NOT_REGISTERED",
+			"AuthManager is not registered in the container — add WardenProvider to your providers list.",
+		);
+	}
+	const auth = resolvedAuth;
 
 	// Read guard metadata from the route handler (if declared via decorators).
-	const controller = ctx.route?.controller;
-	const action = ctx.route?.action;
+	// Ream populates `ctx.controller` / `ctx.action` top-level.
+	const controller = ctx.controller;
+	const action = ctx.action;
 	const strategies =
 		controller && action ? getGuardMetadata(controller, action) : [];
 
@@ -103,7 +162,8 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 	// 2. API key header — reads the header name from the ApiKeyStrategy config
 	//    (defaults to 'x-api-key' if no ApiKeyStrategy is registered)
 	// 3. Cookie/session (Session strategy — handled by the strategy itself via context)
-	const authHeader = ctx.request.headers.authorization ?? "";
+	const headers = ctx.request.headers();
+	const authHeader = headers.authorization ?? "";
 	const bearerToken = authHeader.startsWith("Bearer ")
 		? authHeader.slice(7)
 		: "";
@@ -120,7 +180,7 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 	// declared with `headerName: "X-Custom-Key"` would never match the
 	// incoming `x-custom-key` key without this normalisation — auth
 	// would silently fail even with the right header on the wire.
-	const apiKey = ctx.request.headers[apiKeyHeader.toLowerCase()] ?? "";
+	const apiKey = headers[apiKeyHeader.toLowerCase()] ?? "";
 
 	const hasSessionStrategy = strategies.some((s) => s === "session");
 	if (!bearerToken && !apiKey && !hasSessionStrategy) {
@@ -240,7 +300,7 @@ export async function initializeBouncer(ctx: WardenContext, next: WardenNext) {
 
 	const user = ctx.auth?.user ?? null;
 	const scope: Scope = registry?.resolveScope
-		? await registry.resolveScope(ctx)
+		? await registry.resolveScope(toScopeContext(ctx))
 		: "global";
 
 	ctx.bouncer = new Bouncer(user, registry?.abilities, registry?.policies, {
@@ -250,16 +310,9 @@ export async function initializeBouncer(ctx: WardenContext, next: WardenNext) {
 	await next();
 }
 
-/** Resolve a container token, returning undefined instead of throwing when absent. */
-function tryResolve(
-	ctx: WardenContext,
-	token: string | (abstract new (...args: never[]) => unknown),
-): unknown {
-	try {
-		return ctx.container.resolve(token);
-	} catch {
-		return undefined;
-	}
+/** Resolve a container token from the request resolver, returning undefined instead of throwing when absent. */
+function tryResolve(ctx: WardenContext, token: ResolvableToken): unknown {
+	return resolveFromCtx(ctx, token);
 }
 
 /** Structural guard — the registry is a plain object carrying ability/policy tables. */
@@ -281,7 +334,9 @@ function isBouncerRegistry(value: unknown): value is BouncerRegistry {
 async function resolveRequestScope(ctx: WardenContext): Promise<Scope> {
 	const candidate = tryResolve(ctx, "bouncer:registry");
 	const registry = isBouncerRegistry(candidate) ? candidate : undefined;
-	return registry?.resolveScope ? await registry.resolveScope(ctx) : "global";
+	return registry?.resolveScope
+		? await registry.resolveScope(toScopeContext(ctx))
+		: "global";
 }
 
 /**
@@ -389,4 +444,17 @@ async function checkAuthorization(
 		if (missing.length > 0) return `Missing roles: ${missing.join(", ")}`;
 	}
 	return null;
+}
+
+/**
+ * Default export — the Adonis-style class form Ream's lazy middleware resolver
+ * expects (`new mod.default().handle(ctx, next)`). Without it the documented
+ * `router.use([() => import('@c9up/warden/middleware')])` crashes with
+ * `new undefined()`. The named `wardenMiddleware` / `initializeBouncer` stay for
+ * direct registration `router.use([wardenMiddleware])`.
+ */
+export default class WardenMiddleware {
+	handle(ctx: WardenContext, next: WardenNext): Promise<void> {
+		return wardenMiddleware(ctx, next);
+	}
 }
