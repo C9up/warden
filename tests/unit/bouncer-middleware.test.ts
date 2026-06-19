@@ -103,7 +103,12 @@ describe("warden > initializeBouncer", () => {
 		};
 		const { ctx } = buildCtx({ user: { id: "u1" }, registry: scoped });
 		await initializeBouncer(ctx, () => {});
-		expect(ctx.bouncer?.scope).toEqual({ tenant: "acme" });
+		// ctx.bouncer is typed as the agnostic Authorizer slot; narrow to the
+		// concrete Bouncer (no cast) to read its `scope`.
+		expect(ctx.bouncer).toBeInstanceOf(Bouncer);
+		if (ctx.bouncer instanceof Bouncer) {
+			expect(ctx.bouncer.scope).toEqual({ tenant: "acme" });
+		}
 	});
 
 	it("builds an empty Bouncer when the rights layer is not wired", async () => {

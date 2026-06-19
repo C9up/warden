@@ -56,8 +56,8 @@ function run(manager: AuthManager) {
 			},
 		},
 		session: undefined,
-		controller: SensitiveController.prototype,
-		action: "transfer",
+		// Ream exposes the controller/method under `ctx.route` (Adonis shape).
+		route: { controller: SensitiveController.prototype, action: "transfer" },
 		containerResolver: {
 			make(token) {
 				if (token === AuthManager) return manager;

@@ -73,9 +73,10 @@ function buildCtx(opts: BuildCtxOpts): {
 				response.body = data;
 			},
 		},
-		// Ream populates controller/action top-level on the HttpContext.
-		controller: opts.controller,
-		action: opts.action,
+		// Ream (like Adonis) exposes the controller/method under `ctx.route` —
+		// mirror that real shape so the suite exercises the path the middleware
+		// actually reads (not a top-level fallback the old code happened to read).
+		route: { controller: opts.controller, action: opts.action },
 		session: opts.session,
 		containerResolver,
 	};
@@ -885,10 +886,12 @@ describe("warden > Ream ctx integration (regression)", () => {
 		expect(typeof new WardenMiddleware().handle).toBe("function");
 	});
 
-	it("enforces a guarded route read from ctx.controller/action — no fail-open", async () => {
-		// SECURITY: guard metadata must come from ctx.controller/ctx.action (Ream's
-		// shape). If misread, getGuardMetadata returns [] → route treated as public
-		// → auth bypass. A guarded route with no token must 401, not pass through.
+	it("enforces a guarded route read from ctx.route.controller/action — no fail-open", async () => {
+		// SECURITY: guard metadata must come from `ctx.route.controller/action`
+		// (Ream's real shape, per Adonis). If warden read a non-existent
+		// top-level `ctx.controller`, getGuardMetadata returns [] → route treated
+		// as public → auth bypass. buildCtx sets controller/action under
+		// `ctx.route`; a guarded route with no token must 401, not pass through.
 		const { ctx, response, next } = buildCtx({
 			manager: makeManager({}),
 			controller: SecureController.prototype,
@@ -896,6 +899,38 @@ describe("warden > Ream ctx integration (regression)", () => {
 			headers: {},
 		});
 		await wardenMiddleware(ctx, next.fn);
+		expect(next.called).toBe(false);
+		expect(response.status).toBe(401);
+	});
+
+	it("still enforces a guard when a host exposes controller/action TOP-LEVEL (fallback)", async () => {
+		// Non-Ream hosts may expose them flat — the lookup falls back to
+		// `ctx.controller`/`ctx.action`. A guarded route with no token must 401.
+		const response: RecordedResponse = {};
+		const next = { called: false };
+		const ctx: WardenContext = {
+			request: { headers: () => ({}) },
+			response: {
+				status(code) {
+					response.status = code;
+				},
+				json(data) {
+					response.body = data;
+				},
+			},
+			// Flat, NOT under ctx.route — exercises the fallback branch.
+			controller: SecureController.prototype,
+			action: "secret",
+			containerResolver: {
+				make(token) {
+					if (token === AuthManager) return makeManager({});
+					throw new Error(`No binding for ${String(token)}`);
+				},
+			},
+		};
+		await wardenMiddleware(ctx, () => {
+			next.called = true;
+		});
 		expect(next.called).toBe(false);
 		expect(response.status).toBe(401);
 	});

@@ -70,6 +70,20 @@ interface ContainerResolver {
 	make(token: ResolvableToken): unknown;
 }
 
+/**
+ * Agnostic authorization slot — structurally Ream's `Authorizer` interface (and
+ * Adonis's bouncer contract): `allows` / `denies` / `authorize`. Typed as the
+ * interface, NOT the concrete `Bouncer`, so a real Ream `HttpContext` — whose
+ * `bouncer` is this same agnostic shape — is assignable to `WardenContext`
+ * without warden importing `@c9up/ream`. `initializeBouncer` fills the slot with
+ * a concrete `Bouncer`, which satisfies this contract.
+ */
+interface Authorizer {
+	allows(ability: string, ...args: unknown[]): Promise<boolean>;
+	denies(ability: string, ...args: unknown[]): Promise<boolean>;
+	authorize(ability: string, ...args: unknown[]): Promise<void>;
+}
+
 export interface WardenContext {
 	request: {
 		/** Ream's `HttpContext` exposes headers as a METHOD, not a property. */
@@ -86,9 +100,19 @@ export interface WardenContext {
 		json: (data: unknown) => void;
 	};
 	/**
-	 * Controller prototype + method that own the route — Ream populates these
-	 * top-level on the `HttpContext` (from `match.route.controller`). Absent for
-	 * inline-function routes. Read by the guard-metadata lookup.
+	 * Matched-route info — Ream (like Adonis) exposes the controller class +
+	 * method under `ctx.route` (`ctx.route.controller` / `ctx.route.action`),
+	 * NOT top-level. This is the primary source the guard-metadata lookup reads.
+	 * Absent for inline-function routes. (context7 `/adonisjs/v7-docs`: "access
+	 * the currently matched route via `ctx.route`".)
+	 */
+	route?: {
+		controller?: object;
+		action?: string | symbol;
+	};
+	/**
+	 * Top-level controller/action — kept only as a FALLBACK for hosts that
+	 * expose them flat. Ream uses `ctx.route` (above); the lookup prefers it.
 	 */
 	controller?: object;
 	action?: string | symbol;
@@ -96,8 +120,12 @@ export interface WardenContext {
 	session?: SessionStore;
 	/** Set by the middleware after successful auth (Ream's `auth` slot). */
 	auth?: AuthResult;
-	/** Set by `initializeBouncer` — the per-request authorization entry point. */
-	bouncer?: Bouncer;
+	/**
+	 * Per-request authorization entry point — set by `initializeBouncer`. Typed
+	 * as the agnostic {@link Authorizer} contract (Ream's `ctx.bouncer` slot),
+	 * filled with a concrete `Bouncer` at runtime.
+	 */
+	bouncer?: Authorizer;
 }
 
 /**
@@ -145,9 +173,12 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 	const auth = resolvedAuth;
 
 	// Read guard metadata from the route handler (if declared via decorators).
-	// Ream populates `ctx.controller` / `ctx.action` top-level.
-	const controller = ctx.controller;
-	const action = ctx.action;
+	// Ream (like Adonis) exposes the controller/method under `ctx.route`; fall
+	// back to top-level only for hosts that expose them flat. Reading the wrong
+	// place silently yields `[]` guards → guarded routes treated as public
+	// (fail-open) — the exact bug this precedence prevents.
+	const controller = ctx.route?.controller ?? ctx.controller;
+	const action = ctx.route?.action ?? ctx.action;
 	const strategies =
 		controller && action ? getGuardMetadata(controller, action) : [];
 
