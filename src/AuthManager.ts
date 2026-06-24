@@ -242,6 +242,14 @@ export class AuthManager {
 		return strategy;
 	}
 
+	/**
+	 * Name of the default strategy (Adonis's "default guard"). Used by
+	 * `silentAuth` to pick which strategy to attempt when a route declares none.
+	 */
+	get defaultStrategyName(): string {
+		return this.defaultStrategy;
+	}
+
 	/** Register a new strategy at runtime. */
 	registerStrategy(name: string, strategy: AuthStrategy): void {
 		this.strategies.set(name, strategy);

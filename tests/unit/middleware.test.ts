@@ -7,6 +7,7 @@ import {
 } from "../../src/AuthManager.js";
 import { Guard, Permission, Role } from "../../src/Guard.js";
 import WardenMiddleware, {
+	silentAuth,
 	type WardenContext,
 	wardenMiddleware,
 } from "../../src/middleware.js";
@@ -933,5 +934,71 @@ describe("warden > Ream ctx integration (regression)", () => {
 		});
 		expect(next.called).toBe(false);
 		expect(response.status).toBe(401);
+	});
+});
+
+describe("warden > silentAuth", () => {
+	// A jwt strategy that authenticates exactly the token "good".
+	const jwtStub: AuthStrategy = {
+		name: "jwt",
+		async authenticate() {
+			return { authenticated: false, error: "n/a" };
+		},
+		async verify(token) {
+			return token === "good"
+				? okUser
+				: { authenticated: false, error: "bad token" };
+		},
+	};
+
+	it("populates ctx.auth from a valid Bearer token (default strategy)", async () => {
+		const { ctx, response, next } = buildCtx({
+			manager: makeManager({ jwt: jwtStub }),
+			headers: { authorization: "Bearer good" },
+		});
+		await silentAuth(ctx, next.fn);
+		expect(next.called).toBe(true);
+		expect(ctx.auth?.authenticated).toBe(true);
+		expect(ctx.auth?.user?.id).toBe("u1");
+		expect(response.status).toBeUndefined();
+	});
+
+	it("stays a guest (no throw, no 401) when no token is present", async () => {
+		const { ctx, response, next } = buildCtx({
+			manager: makeManager({ jwt: jwtStub }),
+		});
+		await silentAuth(ctx, next.fn);
+		expect(next.called).toBe(true);
+		expect(ctx.auth).toBeUndefined();
+		expect(response.status).toBeUndefined();
+	});
+
+	it("stays a guest on an invalid token (never 401)", async () => {
+		const { ctx, response, next } = buildCtx({
+			manager: makeManager({ jwt: jwtStub }),
+			headers: { authorization: "Bearer nope" },
+		});
+		await silentAuth(ctx, next.fn);
+		expect(next.called).toBe(true);
+		expect(ctx.auth).toBeUndefined();
+		expect(response.status).toBeUndefined();
+	});
+
+	it("passes through as a guest when no AuthManager is registered (fail-open)", async () => {
+		const { ctx, response, next } = buildCtx({
+			manager: makeManager({ jwt: jwtStub }),
+			headers: { authorization: "Bearer good" },
+		});
+		// Drop the AuthManager binding — silent auth must NOT throw (unlike the
+		// enforcing wardenMiddleware, which fails closed).
+		ctx.containerResolver = {
+			make(token) {
+				throw new Error(`No binding for ${String(token)}`);
+			},
+		};
+		await silentAuth(ctx, next.fn);
+		expect(next.called).toBe(true);
+		expect(ctx.auth).toBeUndefined();
+		expect(response.status).toBeUndefined();
 	});
 });

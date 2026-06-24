@@ -57,7 +57,9 @@ function hasVerifyWithContext(
 type ResolvableToken =
 	| string
 	| symbol
-	| (abstract new (...args: never[]) => unknown);
+	| (abstract new (
+			...args: never[]
+	  ) => unknown);
 
 /**
  * Per-request IoC resolver Ream exposes as `ctx.containerResolver` (Adonis
@@ -293,6 +295,76 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 
 	// Auth successful — attach to context and continue.
 	ctx.auth = result;
+	await next();
+}
+
+/**
+ * Silent auth middleware (AdonisJS `silent_auth` parity) — a GLOBAL middleware
+ * that populates `ctx.auth` from the request's credentials when they're valid,
+ * and NEVER throws / 401s when they're absent or invalid. Register it for every
+ * route, BEFORE `wardenMiddleware` and any tenant middleware that reads
+ * `ctx.auth.user`.
+ *
+ * Why it exists: `wardenMiddleware` only authenticates routes carrying `@Guard`
+ * decorator metadata (`ctx.route.controller/action`). Inline routes — a
+ * `router.post('/rpc', handler)`, relay frames, any `RouteBuilder.guard()`
+ * route — expose no controller/action, so warden never populates `ctx.auth` for
+ * them and a downstream enforcement (Ream's route-level guard check, or the
+ * RpcRouter's per-method `.guard()`) rejects every call even with a valid token.
+ * silentAuth fills `ctx.auth` so that downstream enforcement can do its job; it
+ * decides nothing itself — exactly Adonis (`silent_auth` populates, the `auth`
+ * middleware / route guard enforces).
+ *
+ * Uses the AuthManager's DEFAULT strategy (Adonis's "default guard"). A missing
+ * AuthManager, absent credentials, or a failed/crashed verify all leave the
+ * request as a guest (`ctx.auth` unset) — silent auth is non-enforcing.
+ */
+export async function silentAuth(ctx: WardenContext, next: WardenNext) {
+	const resolvedAuth = resolveFromCtx(ctx, AuthManager);
+	// Non-enforcing: a host without warden wired runs as guest. (Enforcement
+	// middlewares fail CLOSED on a missing AuthManager; silent auth does not.)
+	if (!(resolvedAuth instanceof AuthManager)) {
+		await next();
+		return;
+	}
+	const auth = resolvedAuth;
+
+	const headers = ctx.request.headers();
+	const authHeader = headers.authorization ?? "";
+	const bearerToken = authHeader.startsWith("Bearer ")
+		? authHeader.slice(7)
+		: "";
+	const apiKeyHeader = (() => {
+		try {
+			const s = auth.getStrategy("api-key");
+			const name = "headerName" in s ? s.headerName : undefined;
+			return typeof name === "string" ? name : "x-api-key";
+		} catch {
+			return "x-api-key";
+		}
+	})();
+	const apiKey = headers[apiKeyHeader.toLowerCase()] ?? "";
+
+	const strategy = auth.defaultStrategyName;
+	const hasSessionStrategy = strategy === "session";
+	// No credentials on the wire (and not a session strategy) → guest, no-op.
+	if (!bearerToken && !apiKey && !hasSessionStrategy) {
+		await next();
+		return;
+	}
+
+	// Reuse the same per-strategy verification `wardenMiddleware` uses, but only
+	// for the default strategy, and swallow the outcome: a failed/crashed attempt
+	// must NOT surface as 401/500 here — silent auth only ever populates or skips.
+	const { result } = await tryAuthenticate(auth, [strategy], {
+		bearerToken,
+		apiKey,
+		session: ctx.session,
+		hasSessionStrategy,
+	});
+	if (result?.authenticated && result.user) {
+		ctx.auth = result;
+	}
 	await next();
 }
 

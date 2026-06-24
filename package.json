@@ -1,6 +1,6 @@
 {
   "name": "@c9up/warden",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Warden — Authentication & authorization for the Ream framework",
   "license": "MIT",
   "type": "module",
@@ -30,6 +30,10 @@
     "./middleware": {
       "types": "./src/middleware.ts",
       "import": "./src/middleware.ts"
+    },
+    "./silent-auth": {
+      "types": "./src/silent-auth.ts",
+      "import": "./src/silent-auth.ts"
     },
     "./config": {
       "types": "./src/config.ts",
@@ -69,6 +73,14 @@
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
   },
+  "pnpm": {
+    "//": "Pin the test toolchain to the versions used in dev. Without a committed lockfile the standalone CI resolves fresh (esbuild 0.28.x / vitest 4.1.9), whose decorator transform flakes 'Invalid or unexpected token' on the @Guard/@Permission/@Role suites. Overrides only apply when this package is the install root (CI), so the monorepo workspace is unaffected.",
+    "overrides": {
+      "esbuild": "0.27.7",
+      "vite": "7.3.3",
+      "vitest": "4.1.6"
+    }
+  },
   "engines": {
     "node": ">=22.0.0"
   },
@@ -91,6 +103,10 @@
       "./middleware": {
         "types": "./dist/middleware.d.ts",
         "import": "./dist/middleware.js"
+      },
+      "./silent-auth": {
+        "types": "./dist/silent-auth.d.ts",
+        "import": "./dist/silent-auth.js"
       },
       "./config": {
         "types": "./dist/config.d.ts",
