@@ -43,7 +43,7 @@ function makeSessionStore(): SessionStore & { regenerateCalls: number } {
 	let regenerateCalls = 0;
 	return {
 		get: (key) => store.get(key),
-		set: (key, value) => {
+		put: (key, value) => {
 			store.set(key, value);
 		},
 		forget: (key) => {

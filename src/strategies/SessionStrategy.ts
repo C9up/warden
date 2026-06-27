@@ -12,7 +12,13 @@ import { WardenError } from "../errors.js";
 
 export interface SessionStore {
 	get(key: string): unknown;
-	set(key: string, value: unknown): void;
+	/**
+	 * Write a value. Named `put` to match the AdonisJS `Session` API (and Ream's
+	 * `Session`), so a Ream `Session` satisfies this contract structurally with
+	 * no adapter. (Was `set` — which Ream's Session does not implement, so login
+	 * threw `session.set is not a function` at runtime.)
+	 */
+	put(key: string, value: unknown): void;
 	forget(key: string): void;
 	/**
 	 * Rotate the session id while preserving the data. REQUIRED to mitigate
@@ -95,7 +101,7 @@ export class SessionStrategy implements AuthStrategy {
 	 */
 	async login(user: UserPayload, session: SessionStore): Promise<void> {
 		session.regenerate();
-		session.set(this.#sessionKey, user.id);
+		session.put(this.#sessionKey, user.id);
 	}
 
 	/** Logout — remove user ID from session. */
