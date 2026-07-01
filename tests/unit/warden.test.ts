@@ -383,7 +383,7 @@ describe("warden > security hardening", () => {
 			verifyCredentials: async () => ({ id: "u1" }),
 		});
 		const auth = await jwt.authenticate({ email: "a@b.c", password: "p" });
-		const token = auth.user?.token ?? "";
+		const token = typeof auth.user?.token === "string" ? auth.user.token : "";
 		await expect(jwt.revoke(token)).rejects.toThrow(/blacklist/);
 	});
 

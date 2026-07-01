@@ -23,10 +23,16 @@ class CountingResolver extends RightsResolver {
 }
 
 /** Captures the scope + resolved permissions a policy sees for one check. */
-let captured: { scope: Scope; permissions: EffectivePermissions } | undefined;
+const captured: {
+	value: { scope: Scope; permissions: EffectivePermissions } | undefined;
+} = { value: undefined };
+
+function resetCapture(): void {
+	captured.value = undefined;
+}
 class CapturePolicy extends BasePolicy {
 	inspect(): boolean {
-		captured = { scope: this.scope, permissions: this.permissions };
+		captured.value = { scope: this.scope, permissions: this.permissions };
 		return true;
 	}
 }
@@ -43,22 +49,22 @@ describe("warden > bouncer > scope (56.3)", () => {
 		const bouncer = new Bouncer(user());
 		expect(bouncer.scope).toBe("global");
 
-		captured = undefined;
+		resetCapture();
 		await bouncer.with(CapturePolicy).allows("inspect");
-		expect(captured?.scope).toBe("global");
-		expect(captured?.permissions.permissions.size).toBe(0);
-		expect(captured?.permissions.roles.size).toBe(0);
-		expect(captured?.permissions.has("anything")).toBe(false);
-		expect(captured?.permissions.hasAll([])).toBe(true);
-		expect(captured?.permissions.hasAny(["x"])).toBe(false);
-		expect(captured?.permissions.scope).toBe("global");
+		expect(captured.value?.scope).toBe("global");
+		expect(captured.value?.permissions.permissions.size).toBe(0);
+		expect(captured.value?.permissions.roles.size).toBe(0);
+		expect(captured.value?.permissions.has("anything")).toBe(false);
+		expect(captured.value?.permissions.hasAll([])).toBe(true);
+		expect(captured.value?.permissions.hasAny(["x"])).toBe(false);
+		expect(captured.value?.permissions.scope).toBe("global");
 	});
 
 	it("reads global/empty defaults on a policy used without a Bouncer (AC2)", () => {
-		captured = undefined;
+		resetCapture();
 		expect(new CapturePolicy().inspect()).toBe(true);
-		expect(captured?.scope).toBe("global");
-		expect(captured?.permissions.permissions.size).toBe(0);
+		expect(captured.value?.scope).toBe("global");
+		expect(captured.value?.permissions.permissions.size).toBe(0);
 	});
 
 	it("resolves tenant + inherited global permissions through the policy path (AC3)", async () => {
@@ -66,19 +72,24 @@ describe("warden > bouncer > scope (56.3)", () => {
 			.defineRole("admin", ["tenant.manage"], "global")
 			.assignRole("u1", "admin", "global")
 			.grant("u1", "post.publish", { tenant: "acme" });
-		const bouncer = new Bouncer(user(), {}, {}, {
-			scope: { tenant: "acme" },
-			resolver: new RightsResolver(store),
-		});
+		const bouncer = new Bouncer(
+			user(),
+			{},
+			{},
+			{
+				scope: { tenant: "acme" },
+				resolver: new RightsResolver(store),
+			},
+		);
 
-		captured = undefined;
+		resetCapture();
 		await bouncer.with(CapturePolicy).allows("inspect");
-		expect(captured?.scope).toEqual({ tenant: "acme" });
+		expect(captured.value?.scope).toEqual({ tenant: "acme" });
 		// tenant-scoped grant
-		expect(captured?.permissions.has("post.publish")).toBe(true);
+		expect(captured.value?.permissions.has("post.publish")).toBe(true);
 		// inherited global role permission
-		expect(captured?.permissions.has("tenant.manage")).toBe(true);
-		expect(captured?.permissions.scope).toEqual({ tenant: "acme" });
+		expect(captured.value?.permissions.has("tenant.manage")).toBe(true);
+		expect(captured.value?.permissions.scope).toEqual({ tenant: "acme" });
 	});
 
 	it("memoizes resolution once per Bouncer across N checks (D3)", async () => {
@@ -86,10 +97,15 @@ describe("warden > bouncer > scope (56.3)", () => {
 			tenant: "acme",
 		});
 		const resolver = new CountingResolver(store);
-		const bouncer = new Bouncer(user(), {}, {}, {
-			scope: { tenant: "acme" },
-			resolver,
-		});
+		const bouncer = new Bouncer(
+			user(),
+			{},
+			{},
+			{
+				scope: { tenant: "acme" },
+				resolver,
+			},
+		);
 
 		await bouncer.with(CapturePolicy).allows("inspect");
 		await bouncer.with(CapturePolicy).allows("inspect");
@@ -99,12 +115,17 @@ describe("warden > bouncer > scope (56.3)", () => {
 
 	it("never resolves for a guest and yields empty permissions (D9)", async () => {
 		const resolver = new CountingResolver(new MemoryRightsStore());
-		const bouncer = new Bouncer(null, {}, {}, {
-			scope: { tenant: "acme" },
-			resolver,
-		});
+		const bouncer = new Bouncer(
+			null,
+			{},
+			{},
+			{
+				scope: { tenant: "acme" },
+				resolver,
+			},
+		);
 
-		captured = undefined;
+		resetCapture();
 		// A guest is denied the (undecorated) action, but `before` short-circuit is
 		// irrelevant here — we assert the resolver is never consulted for a null user.
 		await bouncer.with(CapturePolicy).allows("inspect");
@@ -113,16 +134,21 @@ describe("warden > bouncer > scope (56.3)", () => {
 
 	it("yields empty permissions when no resolver is configured", async () => {
 		const bouncer = new Bouncer(user(), {}, {}, { scope: { tenant: "acme" } });
-		captured = undefined;
+		resetCapture();
 		await bouncer.with(CapturePolicy).allows("inspect");
-		expect(captured?.permissions.permissions.size).toBe(0);
-		expect(captured?.scope).toEqual({ tenant: "acme" });
+		expect(captured.value?.permissions.permissions.size).toBe(0);
+		expect(captured.value?.scope).toEqual({ tenant: "acme" });
 	});
 
 	it("enforces tenant isolation via sameTenant (AC4)", async () => {
-		const tenantBouncer = new Bouncer(user(), {}, {}, {
-			scope: { tenant: "acme" },
-		});
+		const tenantBouncer = new Bouncer(
+			user(),
+			{},
+			{},
+			{
+				scope: { tenant: "acme" },
+			},
+		);
 		const acmePost = { tenantId: "acme" };
 		const otherPost = { tenantId: "beta" };
 
@@ -141,9 +167,14 @@ describe("warden > bouncer > scope (56.3)", () => {
 	});
 
 	it("treats a resource missing tenantId as cross-tenant under a tenant scope (AC4)", async () => {
-		const tenantBouncer = new Bouncer(user(), {}, {}, {
-			scope: { tenant: "acme" },
-		});
+		const tenantBouncer = new Bouncer(
+			user(),
+			{},
+			{},
+			{
+				scope: { tenant: "acme" },
+			},
+		);
 		// `undefined !== "acme"` ⇒ denied (no accidental allow on a missing id).
 		expect(await tenantBouncer.with(PostPolicy).allows("edit", {})).toBe(false);
 	});
@@ -152,18 +183,23 @@ describe("warden > bouncer > scope (56.3)", () => {
 		const store = new MemoryRightsStore()
 			.defineRole("admin", ["global.read"], "global")
 			.defineRole("admin", ["acme.secret"], { tenant: "acme" });
-		const bouncer = new Bouncer(user({ roles: ["admin"] }), {}, {}, {
-			scope: { tenant: "acme" },
-			resolver: new RightsResolver(store),
-		});
+		const bouncer = new Bouncer(
+			user({ roles: ["admin"] }),
+			{},
+			{},
+			{
+				scope: { tenant: "acme" },
+				resolver: new RightsResolver(store),
+			},
+		);
 
-		captured = undefined;
+		resetCapture();
 		await bouncer.with(CapturePolicy).allows("inspect");
 		// The global admin role's global permission inherits...
-		expect(captured?.permissions.has("global.read")).toBe(true);
+		expect(captured.value?.permissions.has("global.read")).toBe(true);
 		// ...but the same-named tenant role's permission is NOT picked up.
-		expect(captured?.permissions.has("acme.secret")).toBe(false);
-		expect(captured?.permissions.roles.has("admin")).toBe(true);
+		expect(captured.value?.permissions.has("acme.secret")).toBe(false);
+		expect(captured.value?.permissions.roles.has("admin")).toBe(true);
 	});
 
 	it("keeps the 56.2 four-verb behaviour intact under the default scope (parity)", async () => {

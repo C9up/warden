@@ -28,6 +28,6 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["src"],
+  "include": ["src", "tests"],
   "exclude": ["node_modules", "dist"]
 }

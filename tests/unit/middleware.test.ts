@@ -14,6 +14,7 @@ import WardenMiddleware, {
 import { MemoryRightsStore } from "../../src/rights/MemoryRightsStore.js";
 import { RightsResolver } from "../../src/rights/RightsResolver.js";
 import type { Scope } from "../../src/rights/types.js";
+import type { SessionStore } from "../../src/strategies/SessionStrategy.js";
 
 interface RecordedResponse {
 	status?: number;
@@ -533,6 +534,12 @@ describe("warden > wardenMiddleware — session strategy", () => {
 		get(key: string): unknown;
 	}
 
+	// Build a full SessionStore from just a `get` — the strategy only reads, but
+	// the context type requires the whole write API (put/forget/regenerate).
+	function fakeSession(get: (key: string) => unknown): SessionStore {
+		return { get, put() {}, forget() {}, regenerate() {} };
+	}
+
 	const sessionStrategy = {
 		name: "session",
 		async authenticate() {
@@ -563,11 +570,9 @@ describe("warden > wardenMiddleware — session strategy", () => {
 			defaultStrategy: "session",
 			strategies: { session: sessionStrategy },
 		});
-		const session: SessionLike = {
-			get(key) {
-				return key === "user_id" ? "u-session" : undefined;
-			},
-		};
+		const session = fakeSession((key) =>
+			key === "user_id" ? "u-session" : undefined,
+		);
 		const { ctx, next } = buildCtx({
 			manager,
 			controller: SessionCtl.prototype,
@@ -593,7 +598,7 @@ describe("warden > wardenMiddleware — session strategy", () => {
 			manager,
 			controller: SessionCtl.prototype,
 			action: "handler",
-			session: { get: () => undefined },
+			session: fakeSession(() => undefined),
 		});
 
 		await wardenMiddleware(ctx, () => {});
@@ -630,7 +635,7 @@ describe("warden > wardenMiddleware — session strategy", () => {
 			manager,
 			controller: SessionCtl.prototype,
 			action: "handler",
-			session: { get: () => "u1" },
+			session: fakeSession(() => "u1"),
 		});
 
 		await wardenMiddleware(ctx, next.fn);
