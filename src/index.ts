@@ -4,6 +4,13 @@
  * @implements FR48, FR49, FR50, FR51, FR52, FR53
  */
 
+export type { AuthAttempt, ExtractedCredentials } from "./Authenticator.js";
+export {
+	API_KEY_GUARD_NAMES,
+	Authenticator,
+	extractCredentials,
+	GuardAccessor,
+} from "./Authenticator.js";
 export type {
 	AuthConfig,
 	AuthResult,
@@ -13,6 +20,7 @@ export type {
 export { AuthManager } from "./AuthManager.js";
 export type { AuthRateLimiterConfig } from "./AuthRateLimiter.js";
 export { AuthRateLimiter } from "./AuthRateLimiter.js";
+export { AbilitiesBuilder } from "./bouncer/AbilitiesBuilder.js";
 export { AuthorizationResponse } from "./bouncer/AuthorizationResponse.js";
 export { BasePolicy } from "./bouncer/BasePolicy.js";
 export { Bouncer } from "./bouncer/Bouncer.js";
@@ -27,10 +35,22 @@ export type {
 	AbilityOptions,
 	AuthorizerResponse,
 	BouncerContext,
+	BouncerEmitter,
+	PolicyContainerResolver,
 } from "./bouncer/types.js";
-export { defineConfig } from "./config.js";
+export type { GuardFactory, WardenConfig } from "./config.js";
+export {
+	apiKeyGuard,
+	defineConfig,
+	jwtGuard,
+	sessionGuard,
+} from "./config.js";
 export { configure } from "./configure.js";
-export { WardenError } from "./errors.js";
+export {
+	E_INVALID_CREDENTIALS,
+	E_UNAUTHORIZED_ACCESS,
+	WardenError,
+} from "./errors.js";
 export { GitHubDriver } from "./firstcontact/drivers/GitHubDriver.js";
 export { GoogleDriver } from "./firstcontact/drivers/GoogleDriver.js";
 export { FirstContactManager } from "./firstcontact/FirstContactManager.js";

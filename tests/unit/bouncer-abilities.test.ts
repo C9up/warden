@@ -113,9 +113,9 @@ describe("warden > bouncer > abilities", () => {
 		});
 	});
 
-	it("the deny() convenience mirrors AuthorizationResponse.deny (default 403)", () => {
+	it("the deny() convenience mirrors AuthorizationResponse.deny (no default status)", () => {
 		const bouncer = new Bouncer(user());
-		expect(bouncer.deny().status).toBe(403);
+		expect(bouncer.deny().status).toBeUndefined();
 		expect(bouncer.deny("x", 400).message).toBe("x");
 		expect(bouncer.deny("x", 400).status).toBe(400);
 	});

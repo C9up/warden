@@ -19,21 +19,23 @@ export async function configure(codemods: Codemods): Promise<void> {
 	});
 	await codemods.writeFile(
 		"config/auth.ts",
-		`import { defineConfig } from '@c9up/warden'
+		`import { defineConfig, jwtGuard } from '@c9up/warden'
 
 export default defineConfig({
-  defaultStrategy: 'jwt',
-  jwt: {
-    secret: process.env.JWT_SECRET ?? '',
-    expiresInSeconds: Number(process.env.JWT_EXPIRY ?? '3600'),
-    // TODO: wire these to your user model (e.g. via your ORM).
-    // The JWT strategy needs both to issue and verify tokens.
-    findUser: async (_id) => {
-      throw new Error('TODO: implement findUser(id) for the JWT strategy in config/auth.ts')
-    },
-    verifyCredentials: async (_email, _password) => {
-      throw new Error('TODO: implement verifyCredentials(email, password) in config/auth.ts')
-    },
+  default: 'jwt',
+  guards: {
+    jwt: jwtGuard({
+      secret: process.env.JWT_SECRET ?? '',
+      expiresInSeconds: Number(process.env.JWT_EXPIRY ?? '3600'),
+      // TODO: wire these to your user model (e.g. via your ORM).
+      // The JWT guard needs both to issue and verify tokens.
+      findUser: async (_id) => {
+        throw new Error('TODO: implement findUser(id) for the JWT guard in config/auth.ts')
+      },
+      verifyCredentials: async (_email, _password) => {
+        throw new Error('TODO: implement verifyCredentials(email, password) in config/auth.ts')
+      },
+    }),
   },
 })
 `,

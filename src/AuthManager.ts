@@ -8,6 +8,7 @@ import { WardenError } from "./errors.js";
 import { MemoryRightsStore } from "./rights/MemoryRightsStore.js";
 import { RightsResolver } from "./rights/RightsResolver.js";
 import type { EffectivePermissions, Scope } from "./rights/types.js";
+import type { SessionStore } from "./strategies/SessionStrategy.js";
 
 export interface UserPayload {
 	id: string;
@@ -36,15 +37,32 @@ export interface AuthStrategy {
 	verify(token: string, context?: Record<string, unknown>): Promise<AuthResult>;
 }
 
+/**
+ * AuthManager configuration. Two equivalent forms are accepted:
+ *
+ *   - AdonisJS form (preferred): `{ default, guards }` — `default` names the
+ *     guard used when none is specified, `guards` maps guard name → strategy.
+ *   - Legacy form: `{ defaultStrategy, strategies }` — kept working so existing
+ *     call sites and tests need no change.
+ *
+ * Exactly one of each pair must be supplied. Internally normalised to the
+ * AdonisJS names (`default` / `guards`).
+ */
 export interface AuthConfig {
-	defaultStrategy: string;
-	strategies: Record<string, AuthStrategy>;
+	/** AdonisJS name for the default guard. */
+	default?: string;
+	/** AdonisJS name for the guard map (name → strategy). */
+	guards?: Record<string, AuthStrategy>;
+	/** Legacy alias for {@link AuthConfig.default}. */
+	defaultStrategy?: string;
+	/** Legacy alias for {@link AuthConfig.guards}. */
+	strategies?: Record<string, AuthStrategy>;
 	/**
 	 * The rights resolver backing the coarse RBAC helpers (Epic 56). When
 	 * absent, a default `RightsResolver(new MemoryRightsStore())` is used so
-	 * `new AuthManager({ defaultStrategy, strategies })` keeps working — with
-	 * an empty store, payload roles still fold in (D2) and permissions are
-	 * empty (token `user.permissions` is not an input — D1).
+	 * `new AuthManager({ default, guards })` keeps working — with an empty
+	 * store, payload roles still fold in (D2) and permissions are empty (token
+	 * `user.permissions` is not an input — D1).
 	 */
 	rights?: RightsResolver;
 }
@@ -69,32 +87,44 @@ function isTokenIssuer(
  * Manages authentication strategies and provides guard/permission checks.
  */
 export class AuthManager {
-	private strategies: Map<string, AuthStrategy> = new Map();
-	private defaultStrategy: string;
+	// AdonisJS names: `guards` (name → strategy) and `default` (the guard used
+	// when none is named). Renamed from the previous `strategies`/`defaultStrategy`.
+	private guards: Map<string, AuthStrategy> = new Map();
+	private default: string;
 	private readonly rights: RightsResolver;
 
 	constructor(config: AuthConfig) {
-		this.defaultStrategy = config.defaultStrategy;
-		this.rights = config.rights ?? new RightsResolver(new MemoryRightsStore());
-		for (const [name, strategy] of Object.entries(config.strategies)) {
-			this.strategies.set(name, strategy);
-		}
-		// Fail-fast at construction: an AuthManager with zero strategies
-		// is a configuration bug. Previously, an empty `strategies: {}`
-		// passed the constructor cleanly and the first protected request
-		// crashed at runtime when `getStrategy('jwt')` threw — opaque 401
-		// or 500 instead of a boot-time INVALID_CONFIG that points the
-		// operator at the missing `config.auth.jwt` (or other strategy).
-		if (Object.keys(config.strategies).length === 0) {
+		// Normalise the two accepted forms — AdonisJS `{ default, guards }` and
+		// the legacy `{ defaultStrategy, strategies }` — to the AdonisJS names.
+		const guards = config.guards ?? config.strategies;
+		const defaultGuard = config.default ?? config.defaultStrategy;
+		if (!guards || defaultGuard === undefined) {
 			throw new WardenError(
 				"INVALID_CONFIG",
-				`AuthManager: no authentication strategies registered. Configure at least one strategy (e.g. config.warden.auth.jwt) before booting WardenProvider.`,
+				"AuthManager: config must supply `default` + `guards` (or the legacy `defaultStrategy` + `strategies`).",
 			);
 		}
-		if (!this.strategies.has(config.defaultStrategy)) {
+		this.default = defaultGuard;
+		this.rights = config.rights ?? new RightsResolver(new MemoryRightsStore());
+		for (const [name, strategy] of Object.entries(guards)) {
+			this.guards.set(name, strategy);
+		}
+		// Fail-fast at construction: an AuthManager with zero guards is a
+		// configuration bug. Previously, an empty `guards: {}` passed the
+		// constructor cleanly and the first protected request crashed at
+		// runtime when `getStrategy('jwt')` threw — opaque 401 or 500 instead
+		// of a boot-time INVALID_CONFIG that points the operator at the missing
+		// `config.auth.jwt` (or other guard).
+		if (this.guards.size === 0) {
 			throw new WardenError(
 				"INVALID_CONFIG",
-				`defaultStrategy '${config.defaultStrategy}' is not present in strategies`,
+				`AuthManager: no authentication guards registered. Configure at least one guard (e.g. config.warden.auth.jwt) before booting WardenProvider.`,
+			);
+		}
+		if (!this.guards.has(defaultGuard)) {
+			throw new WardenError(
+				"INVALID_CONFIG",
+				`default guard '${defaultGuard}' is not present in guards`,
 			);
 		}
 	}
@@ -164,7 +194,7 @@ export class AuthManager {
 		if (!isTokenIssuer(strategy)) {
 			throw new WardenError(
 				"STRATEGY_CANNOT_ISSUE",
-				`Auth strategy '${strategyName ?? this.defaultStrategy}' cannot issue tokens.`,
+				`Auth strategy '${strategyName ?? this.default}' cannot issue tokens.`,
 				{
 					hint: "issueFor() needs a token-minting strategy (e.g. JwtStrategy with signToken). Session / API-key strategies don't mint tokens.",
 				},
@@ -228,8 +258,8 @@ export class AuthManager {
 
 	/** Get a registered strategy by name. */
 	getStrategy(name?: string): AuthStrategy {
-		const strategyName = name ?? this.defaultStrategy;
-		const strategy = this.strategies.get(strategyName);
+		const strategyName = name ?? this.default;
+		const strategy = this.guards.get(strategyName);
 		if (!strategy) {
 			throw new WardenError(
 				"STRATEGY_NOT_FOUND",
@@ -243,22 +273,89 @@ export class AuthManager {
 	}
 
 	/**
-	 * Name of the default strategy (Adonis's "default guard"). Used by
-	 * `silentAuth` to pick which strategy to attempt when a route declares none.
+	 * Name of the default guard (Adonis's "default guard"). Used by `silentAuth`
+	 * and the {@link Authenticator} to pick which guard to attempt when a route
+	 * declares none.
 	 */
 	get defaultStrategyName(): string {
-		return this.defaultStrategy;
+		return this.default;
 	}
 
 	/** Register a new strategy at runtime. */
 	registerStrategy(name: string, strategy: AuthStrategy): void {
-		this.strategies.set(name, strategy);
+		this.guards.set(name, strategy);
 	}
 
 	/** Get all registered strategy names. */
 	getStrategyNames(): string[] {
-		return [...this.strategies.keys()];
+		return [...this.guards.keys()];
 	}
+
+	/**
+	 * Log a user in through a session-capable guard (AdonisJS
+	 * `auth.use('web').login(user)` parity). Delegates to the guard's own
+	 * `login()` — for `SessionStrategy` this rotates the session id (session
+	 * fixation defence) and stores the user id. Throws if the resolved guard
+	 * cannot log in (e.g. JWT / API-key guards, which are stateless).
+	 *
+	 * Fixes the misleading `SessionStrategy.authenticate()` sentinel that
+	 * pointed at a then-nonexistent `authManager.login()` (bug-3261).
+	 */
+	async login(
+		user: UserPayload,
+		session: SessionStore,
+		strategyName?: string,
+	): Promise<void> {
+		const strategy = this.getStrategy(strategyName);
+		if (!isLoginCapable(strategy)) {
+			throw new WardenError(
+				"STRATEGY_CANNOT_LOGIN",
+				`Auth strategy '${strategyName ?? this.default}' does not support session login.`,
+				{
+					hint: "login()/logout() need a stateful guard (e.g. SessionStrategy). JWT / API-key guards are stateless — mint a token with issueFor() instead.",
+				},
+			);
+		}
+		await strategy.login(user, session);
+	}
+
+	/**
+	 * Log a user out of a session-capable guard (AdonisJS `auth.use('web').logout()`
+	 * parity). Delegates to the guard's `logout()`. Throws if the resolved guard
+	 * cannot log out.
+	 */
+	async logout(session: SessionStore, strategyName?: string): Promise<void> {
+		const strategy = this.getStrategy(strategyName);
+		if (!isLoginCapable(strategy)) {
+			throw new WardenError(
+				"STRATEGY_CANNOT_LOGIN",
+				`Auth strategy '${strategyName ?? this.default}' does not support session logout.`,
+			);
+		}
+		await strategy.logout(session);
+	}
+}
+
+/** A guard that can start/stop a session for a resolved user (e.g. SessionStrategy). */
+interface LoginCapable {
+	login(user: UserPayload, session: SessionStore): Promise<void>;
+	logout(session: SessionStore): Promise<void>;
+}
+
+/**
+ * Capability check for {@link AuthManager.login}/{@link AuthManager.logout}.
+ * `login`/`logout` are not on the base `AuthStrategy` contract (only stateful
+ * guards implement them), so narrow via `in` + `typeof` — no cast.
+ */
+function isLoginCapable(
+	strategy: AuthStrategy,
+): strategy is AuthStrategy & LoginCapable {
+	return (
+		"login" in strategy &&
+		typeof strategy.login === "function" &&
+		"logout" in strategy &&
+		typeof strategy.logout === "function"
+	);
 }
 
 /** Strip dangerous prototype-pollution keys from user payload. */

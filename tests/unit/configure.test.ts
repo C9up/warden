@@ -58,7 +58,8 @@ describe("warden > configure", () => {
 		expect(state.files).toHaveLength(1);
 		expect(state.files[0]?.path).toBe("config/auth.ts");
 		expect(state.files[0]?.content).toContain("@c9up/warden");
-		expect(state.files[0]?.content).toContain("defaultStrategy: 'jwt'");
+		expect(state.files[0]?.content).toContain("default: 'jwt'");
+		expect(state.files[0]?.content).toContain("jwtGuard(");
 		expect(state.files[0]?.content).toContain("process.env.JWT_SECRET");
 	});
 

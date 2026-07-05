@@ -12,8 +12,27 @@ import type { Scope } from "../rights/types.js";
 import type { AuthorizationResponse } from "./AuthorizationResponse.js";
 
 /**
+ * Agnostic IoC-container resolver used to construct policy instances (Adonis
+ * `PolicyAuthorizer`'s `#containerResolver`). Same shape as `ctx.containerResolver`
+ * so a Ream request context is passed through directly — warden never imports the
+ * container. Absent ⇒ policies are built with a plain `new Policy()`.
+ */
+export interface PolicyContainerResolver {
+	make<T>(ctor: new (...args: never[]) => T): Promise<T>;
+}
+
+/**
+ * Agnostic event sink (Adonis `Bouncer.emitter`). When present, an
+ * `authorization:finished` event fires after every ability/policy evaluation with
+ * `{ user, action, response }`. No-op when absent.
+ */
+export interface BouncerEmitter {
+	emit(event: string, payload: unknown): void;
+}
+
+/**
  * Optional 4th `Bouncer` ctor argument (56.3, D1) — the scope dimension + the
- * Layer-1 resolver. Both optional; omitting it ⇒ the implicit `global` scope
+ * Layer-1 resolver. All optional; omitting it ⇒ the implicit `global` scope
  * with no resolver (single-tenant zero-config, D7). Additive: every 56.2 call
  * site keeps compiling.
  */
@@ -22,6 +41,10 @@ export interface BouncerContext {
 	readonly scope?: Scope;
 	/** Layer-1 resolver consulted for this Bouncer's `(user, scope)`. */
 	readonly resolver?: RightsResolver;
+	/** IoC-container resolver used to construct policies (Adonis DI parity). */
+	readonly containerResolver?: PolicyContainerResolver;
+	/** Event sink for `authorization:finished` (Adonis `Bouncer.emitter`). */
+	readonly emitter?: BouncerEmitter;
 }
 
 /** A predicate's return — bool sugar or an explicit response, sync or async (D7). */

@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { AuthorizationResponse } from "../../src/bouncer/AuthorizationResponse.js";
 
 describe("warden > bouncer > AuthorizationResponse", () => {
-	it("deny() defaults to status 403 with no message (D6)", () => {
+	it("deny() carries no status by default (403 is applied only at the HTTP boundary)", () => {
 		const response = AuthorizationResponse.deny();
 		expect(response.authorized).toBe(false);
-		expect(response.status).toBe(403);
+		expect(response.status).toBeUndefined();
 		expect(response.message).toBeUndefined();
 	});
 

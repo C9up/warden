@@ -70,7 +70,7 @@ describe("SessionStrategy > design boundary", () => {
 		await expect(
 			strategy.authenticate({ email: "a", password: "b" }),
 		).rejects.toThrow(
-			/SessionStrategy\.authenticate\(\) requires login\(\) instead/,
+			/SessionStrategy has no credential step|authManager\.login\(user, session\)/,
 		);
 	});
 });
@@ -85,7 +85,9 @@ describe("SessionStrategy > caller-verified password flow", () => {
 		users.set(user.id, user);
 
 		const stored = defined(users.get(user.id));
-		expect(await hasher.verify("correct-horse", stored.passwordHash)).toBe(true);
+		expect(await hasher.verify("correct-horse", stored.passwordHash)).toBe(
+			true,
+		);
 
 		const strategy = new SessionStrategy({
 			findUser: async (id) => users.get(String(id)) ?? null,

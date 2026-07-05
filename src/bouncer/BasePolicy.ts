@@ -27,13 +27,15 @@ export abstract class BasePolicy {
 
 	/**
 	 * Runs after the action (or after a `before` short-circuit), receiving the
-	 * resolved response. A non-`undefined` return overrides it; `undefined`
-	 * keeps it.
+	 * resolved response and the same resource args passed to the action (Adonis
+	 * `after(user, action, result, ...args)`). A non-`undefined` return overrides
+	 * the response; `undefined` keeps it.
 	 */
 	after?(
 		user: UserPayload | null,
 		action: string,
 		result: AuthorizationResponse,
+		...args: unknown[]
 	): HookResponse;
 
 	/**

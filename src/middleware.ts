@@ -16,17 +16,13 @@
  *   }
  */
 
-import {
-	AuthManager,
-	type AuthResult,
-	type AuthStrategy,
-	sanitizePayload,
-} from "./AuthManager.js";
+import { Authenticator } from "./Authenticator.js";
+import { AuthManager, type UserPayload } from "./AuthManager.js";
 import type { BasePolicy } from "./bouncer/BasePolicy.js";
 import { Bouncer } from "./bouncer/Bouncer.js";
 import type { Ability } from "./bouncer/types.js";
 import type { ScopeRequestContext } from "./config.js";
-import { WardenError } from "./errors.js";
+import { E_UNAUTHORIZED_ACCESS, WardenError } from "./errors.js";
 import {
 	getGuardMetadata,
 	getPermissionMetadata,
@@ -36,18 +32,6 @@ import {
 import { RightsResolver } from "./rights/RightsResolver.js";
 import type { Scope } from "./rights/types.js";
 import type { SessionStore } from "./strategies/SessionStrategy.js";
-
-interface StrategyWithContext extends AuthStrategy {
-	verifyWithContext(token: string, ctx: unknown): Promise<AuthResult>;
-}
-
-function hasVerifyWithContext(
-	strategy: AuthStrategy,
-): strategy is StrategyWithContext {
-	return (
-		typeof (strategy as StrategyWithContext).verifyWithContext === "function"
-	);
-}
 
 /**
  * Tokens warden resolves from the container: a service class, or a string/symbol
@@ -100,6 +84,13 @@ export interface WardenContext {
 	response: {
 		status: (code: number) => unknown;
 		json: (data: unknown) => void;
+		/**
+		 * Redirect the response (Ream's `ctx.response.redirect`). Optional so a
+		 * minimal host without it still gets the 401 JSON fallback — Warden does
+		 * its own content negotiation (see `renderAuthError`) rather than leaning
+		 * on the host's exception handler.
+		 */
+		redirect?: (url: string) => unknown;
 	};
 	/**
 	 * Matched-route info — Ream (like Adonis) exposes the controller class +
@@ -120,8 +111,12 @@ export interface WardenContext {
 	action?: string | symbol;
 	/** Session store — set by a session middleware upstream. */
 	session?: SessionStore;
-	/** Set by the middleware after successful auth (Ream's `auth` slot). */
-	auth?: AuthResult;
+	/**
+	 * The per-request {@link Authenticator} (Ream's `auth` slot). `silentAuth`
+	 * (global) or `wardenMiddleware` (per guarded route) sets it; inline handlers
+	 * then call `ctx.auth.authenticate()` / `ctx.auth.use('session').login(user)`.
+	 */
+	auth?: Authenticator;
 	/**
 	 * Per-request authorization entry point — set by `initializeBouncer`. Typed
 	 * as the agnostic {@link Authorizer} contract (Ream's `ctx.bouncer` slot),
@@ -193,75 +188,33 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 		return;
 	}
 
-	// Extract credentials from multiple sources:
-	// 1. Authorization: Bearer <jwt> (JWT strategy)
-	// 2. API key header — reads the header name from the ApiKeyStrategy config
-	//    (defaults to 'x-api-key' if no ApiKeyStrategy is registered)
-	// 3. Cookie/session (Session strategy — handled by the strategy itself via context)
-	const headers = ctx.request.headers();
-	const authHeader = headers.authorization ?? "";
-	const bearerToken = authHeader.startsWith("Bearer ")
-		? authHeader.slice(7)
-		: "";
-	const apiKeyHeader = (() => {
-		try {
-			const s = auth.getStrategy("api-key");
-			return (s as { headerName?: string }).headerName ?? "x-api-key";
-		} catch {
-			return "x-api-key";
+	// Delegate authentication to the per-request Authenticator (the SAME contract
+	// inline handlers use via `ctx.auth.authenticate()`), so the decorator path
+	// and the functional path share one code path. It sets `ctx.auth` and throws
+	// on failure — E_UNAUTHORIZED_ACCESS (401, credential rejection) or a
+	// WARDEN_AUTH_STRATEGY_ERROR (500, every attempted guard crashed).
+	const authenticator = ensureAuthenticator(ctx, auth);
+	const loginRoute = await resolveLoginRoute(ctx);
+	try {
+		await authenticator.authenticateUsing(strategies, { loginRoute });
+	} catch (err) {
+		if (err instanceof E_UNAUTHORIZED_ACCESS) {
+			renderAuthError(ctx, err);
+			return;
 		}
-	})();
-	// HTTP header names are case-insensitive. Node + every Ream-side
-	// runtime lowercases incoming header keys, so an `ApiKeyStrategy`
-	// declared with `headerName: "X-Custom-Key"` would never match the
-	// incoming `x-custom-key` key without this normalisation — auth
-	// would silently fail even with the right header on the wire.
-	const apiKey = headers[apiKeyHeader.toLowerCase()] ?? "";
-
-	const hasSessionStrategy = strategies.some((s) => s === "session");
-	if (!bearerToken && !apiKey && !hasSessionStrategy) {
-		ctx.response.status(401);
-		ctx.response.json({
-			error: {
-				code: "UNAUTHORIZED",
-				message: "Missing authentication token (Bearer or x-api-key)",
-			},
-		});
-		return;
-	}
-
-	// Try each declared strategy. If every attempted strategy crashed AND none
-	// succeeded, the caller returns 500 instead of 401 — a server-side incident
-	// must stay observably distinct from a credential rejection.
-	const { result, attemptCount, crashCount } = await tryAuthenticate(
-		auth,
-		strategies,
-		{ bearerToken, apiKey, session: ctx.session, hasSessionStrategy },
-	);
-
-	if (!result?.authenticated || !result.user) {
-		if (attemptCount > 0 && crashCount === attemptCount) {
+		// Every attempted guard crashed → server-side incident, mapped to 500 so
+		// it stays observably distinct from a credential rejection.
+		if (err instanceof WardenError && err.status === 500) {
 			ctx.response.status(500);
 			ctx.response.json({
-				error: {
-					code: "AUTH_STRATEGY_ERROR",
-					message:
-						"Authentication unavailable — one or more strategies failed. Check server logs.",
-				},
+				error: { code: "AUTH_STRATEGY_ERROR", message: err.message },
 			});
 			return;
 		}
-		ctx.response.status(401);
-		ctx.response.json({
-			error: {
-				code: "UNAUTHORIZED",
-				message: result?.error ?? "Authentication failed",
-			},
-		});
-		return;
+		throw err;
 	}
 
-	const user = result.user;
+	const user = authenticator.getUserOrFail();
 
 	// Permission + role checks are independent AND gates: the user must satisfy
 	// ALL required permissions AND ALL required roles. Having a role does NOT
@@ -296,8 +249,7 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 		}
 	}
 
-	// Auth successful — attach to context and continue.
-	ctx.auth = result;
+	// Auth successful — `ctx.auth` (the Authenticator) already carries the user.
 	await next();
 }
 
@@ -319,8 +271,11 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
  * middleware / route guard enforces).
  *
  * Uses the AuthManager's DEFAULT strategy (Adonis's "default guard"). A missing
- * AuthManager, absent credentials, or a failed/crashed verify all leave the
- * request as a guest (`ctx.auth` unset) — silent auth is non-enforcing.
+ * AuthManager leaves the request a guest with `ctx.auth` unset; otherwise
+ * `ctx.auth` is ALWAYS set to an {@link Authenticator} (AdonisJS
+ * `initialize_auth_middleware` parity) — populated when credentials verify,
+ * left as a guest (`isAuthenticated === false`) when they're absent, invalid, or
+ * a guard crashes. Silent auth NEVER surfaces a 401/500.
  */
 export async function silentAuth(ctx: WardenContext, next: WardenNext) {
 	const resolvedAuth = await resolveFromCtx(ctx, AuthManager);
@@ -330,45 +285,66 @@ export async function silentAuth(ctx: WardenContext, next: WardenNext) {
 		await next();
 		return;
 	}
-	const auth = resolvedAuth;
-
-	const headers = ctx.request.headers();
-	const authHeader = headers.authorization ?? "";
-	const bearerToken = authHeader.startsWith("Bearer ")
-		? authHeader.slice(7)
-		: "";
-	const apiKeyHeader = (() => {
-		try {
-			const s = auth.getStrategy("api-key");
-			const name = "headerName" in s ? s.headerName : undefined;
-			return typeof name === "string" ? name : "x-api-key";
-		} catch {
-			return "x-api-key";
-		}
-	})();
-	const apiKey = headers[apiKeyHeader.toLowerCase()] ?? "";
-
-	const strategy = auth.defaultStrategyName;
-	const hasSessionStrategy = strategy === "session";
-	// No credentials on the wire (and not a session strategy) → guest, no-op.
-	if (!bearerToken && !apiKey && !hasSessionStrategy) {
-		await next();
-		return;
-	}
-
-	// Reuse the same per-strategy verification `wardenMiddleware` uses, but only
-	// for the default strategy, and swallow the outcome: a failed/crashed attempt
-	// must NOT surface as 401/500 here — silent auth only ever populates or skips.
-	const { result } = await tryAuthenticate(auth, [strategy], {
-		bearerToken,
-		apiKey,
-		session: ctx.session,
-		hasSessionStrategy,
-	});
-	if (result?.authenticated && result.user) {
-		ctx.auth = result;
+	const authenticator = ensureAuthenticator(ctx, resolvedAuth);
+	try {
+		// `check()` runs the default guard and returns a boolean instead of
+		// throwing on a credential rejection; the catch swallows the residual
+		// crash/config path so silent auth stays strictly non-enforcing.
+		await authenticator.check();
+	} catch {
+		// Guard crash / config error → stay a guest, never surface here.
 	}
 	await next();
+}
+
+/**
+ * Reuse the request's Authenticator if one is already attached (e.g. `silentAuth`
+ * ran first), else build and attach a fresh one. Keeps `ctx.auth` a single
+ * per-request instance across the middleware chain.
+ */
+function ensureAuthenticator(
+	ctx: WardenContext,
+	auth: AuthManager,
+): Authenticator {
+	if (ctx.auth instanceof Authenticator) return ctx.auth;
+	const authenticator = new Authenticator(ctx, auth);
+	ctx.auth = authenticator;
+	return authenticator;
+}
+
+/**
+ * Optional login route (`ctx.response.redirect` target for session-guard HTML
+ * flows). Registered by `WardenProvider` from `config.auth.loginRoute` under the
+ * `"warden:loginRoute"` token; absent ⇒ no redirect (401 JSON).
+ */
+async function resolveLoginRoute(
+	ctx: WardenContext,
+): Promise<string | undefined> {
+	const value = await resolveFromCtx(ctx, "warden:loginRoute");
+	return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * Render an `E_UNAUTHORIZED_ACCESS` to the response — Warden does its OWN content
+ * negotiation (AdonisJS session renderer parity) instead of leaning on the
+ * host's exception handler, so it stays agnostic. An `Accept: text/html` request
+ * against a session guard carrying a `redirectTo` is redirected to the login
+ * route; every other case gets a 401 JSON body. Always fail-closed.
+ */
+export function renderAuthError(
+	ctx: WardenContext,
+	error: E_UNAUTHORIZED_ACCESS,
+): void {
+	const accept = ctx.request.headers().accept ?? "";
+	const wantsHtml = accept.includes("text/html");
+	if (wantsHtml && error.redirectTo && ctx.response.redirect) {
+		ctx.response.redirect(error.redirectTo);
+		return;
+	}
+	ctx.response.status(error.status ?? 401);
+	ctx.response.json({
+		error: { code: error.code, message: error.message },
+	});
 }
 
 /**
@@ -449,83 +425,6 @@ async function resolveRequestScope(ctx: WardenContext): Promise<Scope> {
 }
 
 /**
- * Try each declared strategy in order — session strategies via
- * `verifyWithContext()`, others via `verify(token)` with native-first credential
- * fallback. Distinguishes crashes (strategy threw / `strategyCrash`) from
- * credential rejections so the caller can return 500 vs 401.
- */
-async function tryAuthenticate(
-	auth: AuthManager,
-	strategies: string[],
-	creds: {
-		bearerToken: string;
-		apiKey: string;
-		session: SessionStore | undefined;
-		hasSessionStrategy: boolean;
-	},
-): Promise<{
-	result: AuthResult | null;
-	attemptCount: number;
-	crashCount: number;
-}> {
-	const { bearerToken, apiKey, session } = creds;
-	let result: AuthResult | null = null;
-	let attemptCount = 0;
-	let crashCount = 0;
-	for (const strategyName of strategies) {
-		try {
-			let r: AuthResult;
-			if (strategyName === "session") {
-				const strategy = auth.getStrategy(strategyName);
-				const verifyWithContext =
-					strategy && hasVerifyWithContext(strategy)
-						? strategy.verifyWithContext
-						: undefined;
-				if (verifyWithContext) {
-					attemptCount++;
-					r = await verifyWithContext.call(strategy, "", { session });
-					// The session path bypasses AuthManager.verify(), so apply the
-					// same prototype-pollution guard JWT / api-key users get there.
-					if (r.user) sanitizePayload(r.user);
-				} else {
-					continue;
-				}
-			} else {
-				// Native-first credential, other transport as fallback so a
-				// single-credential client still authenticates (and an invalid
-				// Bearer no longer masks a valid API key for the api-key strategy).
-				const credential =
-					strategyName === "api-key"
-						? apiKey || bearerToken
-						: bearerToken || apiKey;
-				if (!credential) continue;
-				attemptCount++;
-				r = await auth.verify(credential, strategyName);
-			}
-			if (r.authenticated) {
-				result = r;
-				break;
-			}
-			if (r.strategyCrash === true) {
-				crashCount++;
-				console.error(
-					`[warden] strategy '${strategyName}' threw during verify(): ${r.error ?? "unknown error"}`,
-				);
-			}
-		} catch (err) {
-			// AuthManager rethrows structured WardenError sentinels — treat these
-			// as crashes too (config errors, SessionStrategy.USE_LOGIN, etc.).
-			crashCount++;
-			console.error(
-				`[warden] strategy '${strategyName}' threw during verify():`,
-				err,
-			);
-		}
-	}
-	return { result, attemptCount, crashCount };
-}
-
-/**
  * Gate the authenticated user against the route's @Permission / @Role decorators.
  * Both are independent AND gates resolved ONCE against the same unified
  * EffectivePermissions set (Epic 56, D7). Returns the FORBIDDEN message, or null
@@ -533,7 +432,7 @@ async function tryAuthenticate(
  */
 async function checkAuthorization(
 	auth: AuthManager,
-	user: NonNullable<AuthResult["user"]>,
+	user: UserPayload,
 	controller: object,
 	action: string | symbol,
 	scope: Scope,

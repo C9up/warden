@@ -16,7 +16,10 @@ export interface ApiKeyConfig {
 }
 
 export class ApiKeyStrategy implements AuthStrategy {
-	name = "api-key";
+	// AdonisJS names this guard driver "access_tokens". The legacy "api-key"
+	// spelling is still accepted as a guard name / credential trigger by the
+	// middleware and providers (see `API_KEY_GUARD_NAMES`) for back-compat.
+	name = "access_tokens";
 	#config: ApiKeyConfig;
 	#headerName: string;
 

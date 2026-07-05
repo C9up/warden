@@ -69,6 +69,7 @@ export async function evaluate(params: {
 		user: UserPayload | null,
 		action: string,
 		result: AuthorizationResponse,
+		...args: unknown[]
 	) => HookResponse;
 }): Promise<AuthorizationResponse> {
 	const { user, action, allowGuest, run, args, before, after } = params;
@@ -92,9 +93,10 @@ export async function evaluate(params: {
 		}
 	}
 
-	// (4) after — non-undefined overrides.
+	// (4) after — non-undefined overrides. Receives the resource args (Adonis
+	// `policy.after(user, action, result, ...args)`).
 	if (after) {
-		const override = await after(user, action, response);
+		const override = await after(user, action, response, ...args);
 		if (override !== undefined) {
 			response = normalizeResponse(override);
 		}

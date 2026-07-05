@@ -58,9 +58,9 @@ export class SessionStrategy implements AuthStrategy {
 		// `strategy.authenticate()` directly.
 		throw new WardenError(
 			"USE_LOGIN",
-			"SessionStrategy.authenticate() requires login() instead. Use authManager.login(user, session).",
+			"SessionStrategy has no credential step. Verify the password yourself, then start the session via authManager.login(user, session) (or ctx.auth.use('session').login(user)).",
 			{
-				hint: "Verify the password yourself (e.g. via @c9up/sigil Hash.verify), then call SessionStrategy.login(user, session).",
+				hint: "Verify the password yourself (e.g. via @c9up/sigil Hash.verify), then call authManager.login(user, session) — SessionStrategy.login(user, session) also works directly.",
 			},
 		);
 	}

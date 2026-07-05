@@ -3,27 +3,22 @@
  *
  * Layer 2 (EVALUATION) of Warden's unified authorization (Epic 56). Faithful
  * to AdonisJS Bouncer's `AuthorizationResponse`: instances are produced only by
- * the `allow()` / `deny()` static constructors (the constructor is private), a
- * denial defaults to HTTP 403, and a `translation` field is carried for shape
- * parity with Adonis's i18n hook (always `undefined` in 56.2 — D6).
+ * the `allow()` / `deny()` static constructors (the constructor is private). A
+ * denial carries no `status` unless one is passed — the HTTP 403 default is
+ * applied only at the throw/HTTP boundary (Adonis parity) — and a `translation`
+ * field carries the i18n binding set via {@link t}.
  */
 export class AuthorizationResponse {
 	readonly authorized: boolean;
-	readonly message?: string;
-	readonly status?: number;
-	/** Parity placeholder for an i18n binding (always undefined in 56.2 — D6). */
-	readonly translation?: { identifier: string; data?: Record<string, unknown> };
+	message?: string;
+	status?: number;
+	/** i18n binding set via {@link t} (Adonis `AuthorizationResponse.t`). */
+	translation?: { identifier: string; data?: Record<string, unknown> };
 
-	private constructor(
-		authorized: boolean,
-		message?: string,
-		status?: number,
-		translation?: { identifier: string; data?: Record<string, unknown> },
-	) {
+	private constructor(authorized: boolean, message?: string, status?: number) {
 		this.authorized = authorized;
 		this.message = message;
 		this.status = status;
-		this.translation = translation;
 	}
 
 	/** Authorized response (no status). */
@@ -31,8 +26,21 @@ export class AuthorizationResponse {
 		return new AuthorizationResponse(true);
 	}
 
-	/** Denied response; `status` defaults to 403 (D6). */
-	static deny(message?: string, status = 403): AuthorizationResponse {
+	/**
+	 * Denied response. `status` is left `undefined` unless passed — the 403
+	 * default is applied only when the denial is thrown / mapped to HTTP (Adonis
+	 * parity).
+	 */
+	static deny(message?: string, status?: number): AuthorizationResponse {
 		return new AuthorizationResponse(false, message, status);
+	}
+
+	/**
+	 * Set the i18n translation binding and return `this` for chaining (Adonis
+	 * `AuthorizationResponse.t`), e.g. `AuthorizationResponse.deny().t('errors.forbidden')`.
+	 */
+	t(identifier: string, data?: Record<string, unknown>): this {
+		this.translation = { identifier, data };
+		return this;
 	}
 }

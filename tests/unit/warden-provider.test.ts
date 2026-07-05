@@ -76,7 +76,7 @@ describe("warden > WardenProvider", () => {
 		// fails fast with an actionable error pointing at reamrc.ts.
 		const { app } = makeFakeApp({ defaultStrategy: "jwt" });
 		expect(() => new WardenProvider(app).register()).toThrow(
-			/WARDEN_NO_AUTH_CONFIG|no authentication strategies configured/,
+			/WARDEN_NO_AUTH_CONFIG|no authentication guards configured/,
 		);
 	});
 
@@ -244,7 +244,7 @@ describe("warden > WardenProvider", () => {
 		// returns undefined (no `config.warden.auth` block at all).
 		const { app } = makeFakeApp(undefined);
 		expect(() => new WardenProvider(app).register()).toThrow(
-			/WARDEN_NO_AUTH_CONFIG|no authentication strategies configured/,
+			/WARDEN_NO_AUTH_CONFIG|no authentication guards configured/,
 		);
 	});
 });

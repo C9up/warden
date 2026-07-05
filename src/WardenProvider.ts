@@ -39,34 +39,59 @@ export default class WardenProvider {
 		// AuthManager with `strategies: {}` and `defaultStrategy: 'jwt'`,
 		// passing the (then-permissive) constructor and erroring deep in the
 		// middleware loop.
-		if (!config?.jwt && !config?.session && !config?.apiKey) {
+		const hasGuards = config?.guards && Object.keys(config.guards).length > 0;
+		if (!hasGuards && !config?.jwt && !config?.session && !config?.apiKey) {
 			throw new WardenError(
 				"WARDEN_NO_AUTH_CONFIG",
-				`@c9up/warden: no authentication strategies configured. Set at least one of config.warden.auth.jwt / .session / .apiKey in your reamrc.ts before registering WardenProvider.`,
+				`@c9up/warden: no authentication guards configured. Set config.warden.auth.guards (AdonisJS form) or at least one of .jwt / .session / .apiKey in your reamrc.ts before registering WardenProvider.`,
 			);
 		}
 
-		// Build the strategy table from whatever the app configured. Each strategy
-		// is also exposed by its class token (mirrors the jwt convention) so apps
-		// can resolve a specific one. The `revoke()` blacklist flows through
-		// `config.jwt.blacklist` into JwtStrategy.
+		// Build the guard table. Two accepted forms:
+		//  - AdonisJS: `config.guards` (name → AuthStrategy, via *Guard() factories).
+		//  - Legacy driver-keyed: `config.jwt` / `.session` / `.apiKey`.
+		// Each strategy is also exposed by its class token (so apps can resolve a
+		// specific one). The `revoke()` blacklist flows through `config.jwt.blacklist`.
 		const strategies: Record<string, AuthStrategy> = {};
 
-		if (config.jwt) {
-			const jwt = new JwtStrategy(config.jwt);
-			this.app.container.singleton(JwtStrategy, () => jwt);
-			strategies.jwt = jwt;
+		if (hasGuards && config.guards) {
+			for (const [name, strategy] of Object.entries(config.guards)) {
+				strategies[name] = strategy;
+				// Expose recognised driver instances by their class token too.
+				if (strategy instanceof JwtStrategy) {
+					this.app.container.singleton(JwtStrategy, () => strategy);
+				} else if (strategy instanceof SessionStrategy) {
+					this.app.container.singleton(SessionStrategy, () => strategy);
+				} else if (strategy instanceof ApiKeyStrategy) {
+					this.app.container.singleton(ApiKeyStrategy, () => strategy);
+				}
+			}
+		} else {
+			if (config.jwt) {
+				const jwt = new JwtStrategy(config.jwt);
+				this.app.container.singleton(JwtStrategy, () => jwt);
+				strategies.jwt = jwt;
+			}
+			if (config.session) {
+				const session = new SessionStrategy(config.session);
+				this.app.container.singleton(SessionStrategy, () => session);
+				strategies.session = session;
+			}
+			if (config.apiKey) {
+				const apiKey = new ApiKeyStrategy(config.apiKey);
+				this.app.container.singleton(ApiKeyStrategy, () => apiKey);
+				// AdonisJS names this guard driver "access_tokens"; keep "api-key"
+				// as an accepted alias so existing `@Guard('api-key')` routes work.
+				strategies.access_tokens = apiKey;
+				strategies["api-key"] = apiKey;
+			}
 		}
-		if (config.session) {
-			const session = new SessionStrategy(config.session);
-			this.app.container.singleton(SessionStrategy, () => session);
-			strategies.session = session;
-		}
-		if (config.apiKey) {
-			const apiKey = new ApiKeyStrategy(config.apiKey);
-			this.app.container.singleton(ApiKeyStrategy, () => apiKey);
-			strategies["api-key"] = apiKey;
-		}
+
+		// Login route (session-guard HTML redirect target) — resolved by the
+		// enforcing middleware via the "warden:loginRoute" token. Registered even
+		// when undefined so the lookup is a clean resolve, not a throw.
+		const loginRoute = config.loginRoute;
+		this.app.container.singleton("warden:loginRoute", () => loginRoute);
 
 		// Rights layer (Epic 56): one resolver singleton backs BOTH the coarse
 		// RBAC helpers (injected into AuthManager below) and — once 56.6 lands —
@@ -93,13 +118,14 @@ export default class WardenProvider {
 		};
 		this.app.container.singleton("bouncer:registry", () => bouncerRegistry);
 
-		// Default to the configured strategy, else the first one registered.
-		const defaultStrategy =
-			config.defaultStrategy ?? Object.keys(strategies)[0];
+		// Default to the configured guard (AdonisJS `default`, then legacy
+		// `defaultStrategy`), else the first one registered.
+		const defaultGuard =
+			config.default ?? config.defaultStrategy ?? Object.keys(strategies)[0];
 		this.app.container.singleton(AuthManager, () => {
 			return new AuthManager({
-				defaultStrategy,
-				strategies,
+				default: defaultGuard,
+				guards: strategies,
 				rights: rightsResolver,
 			});
 		});

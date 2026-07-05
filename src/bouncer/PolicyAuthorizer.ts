@@ -19,6 +19,7 @@ import {
 	throwAuthorizationFailure,
 } from "./evaluate.js";
 import { emptyPermissions, setPolicyContext } from "./policyContext.js";
+import type { BouncerEmitter } from "./types.js";
 
 /**
  * Resolve a named action method declared anywhere on the policy's own subclass
@@ -65,21 +66,24 @@ function resolveActionMethod(policy: BasePolicy, action: string): Action {
 
 export class PolicyAuthorizer {
 	readonly #user: UserPayload | null;
-	readonly #factory: () => BasePolicy;
+	readonly #factory: () => Promise<BasePolicy>;
 	readonly #scope: Scope;
 	readonly #resolvePermissions: () => Promise<EffectivePermissions>;
+	readonly #emitter: BouncerEmitter | undefined;
 
 	constructor(
 		user: UserPayload | null,
-		factory: () => BasePolicy,
+		factory: () => Promise<BasePolicy>,
 		scope: Scope = "global",
 		resolvePermissions: () => Promise<EffectivePermissions> = () =>
 			Promise.resolve(emptyPermissions(scope)),
+		emitter?: BouncerEmitter,
 	) {
 		this.#user = user;
 		this.#factory = factory;
 		this.#scope = scope;
 		this.#resolvePermissions = resolvePermissions;
+		this.#emitter = emitter;
 	}
 
 	/** Run a check and resolve to the full response (D8 — fresh policy per check). */
@@ -87,14 +91,14 @@ export class PolicyAuthorizer {
 		action: string,
 		...args: unknown[]
 	): Promise<AuthorizationResponse> {
-		const policy = this.#factory();
+		const policy = await this.#factory();
 		// Attach the active scope + resolved permissions BEFORE dispatch so the
 		// before/method/after pipeline all read `this.scope` / `this.permissions`.
 		const permissions = await this.#resolvePermissions();
 		setPolicyContext(policy, { scope: this.#scope, permissions });
 		const method = resolveActionMethod(policy, action);
 		const options = getActionMetadata(policy, action);
-		return evaluate({
+		const response = await evaluate({
 			user: this.#user,
 			action,
 			allowGuest: options.allowGuest ?? false,
@@ -103,6 +107,12 @@ export class PolicyAuthorizer {
 			before: policy.before?.bind(policy),
 			after: policy.after?.bind(policy),
 		});
+		this.#emitter?.emit("authorization:finished", {
+			user: this.#user,
+			action,
+			response,
+		});
+		return response;
 	}
 
 	/** True iff the action is authorized. Never throws on denial. */

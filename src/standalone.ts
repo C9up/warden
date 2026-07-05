@@ -52,25 +52,33 @@ export interface Warden {
  * Create a standalone Warden instance — no Ream container needed.
  */
 export function createWarden(config: WardenConfig): Warden {
-	// Mirror WardenProvider: build EVERY configured strategy, not just jwt —
-	// otherwise config.session / config.apiKey were silently dropped and a
-	// jwt-less config (e.g. { defaultStrategy: 'api-key', apiKey }) threw
-	// INVALID_CONFIG at boot (audit 2026-06-13). Keys match the @Guard names.
+	// Mirror WardenProvider: accept the AdonisJS `guards` form OR the legacy
+	// driver-keyed fields, building EVERY configured strategy — otherwise
+	// config.session / config.apiKey were silently dropped and a jwt-less config
+	// (e.g. { defaultStrategy: 'api-key', apiKey }) threw INVALID_CONFIG at boot
+	// (audit 2026-06-13). Keys match the @Guard names.
 	const strategies: Record<string, AuthStrategy> = {};
 
-	if (config.jwt) {
-		strategies.jwt = new JwtStrategy(config.jwt);
-	}
-	if (config.session) {
-		strategies.session = new SessionStrategy(config.session);
-	}
-	if (config.apiKey) {
-		strategies["api-key"] = new ApiKeyStrategy(config.apiKey);
+	if (config.guards && Object.keys(config.guards).length > 0) {
+		Object.assign(strategies, config.guards);
+	} else {
+		if (config.jwt) {
+			strategies.jwt = new JwtStrategy(config.jwt);
+		}
+		if (config.session) {
+			strategies.session = new SessionStrategy(config.session);
+		}
+		if (config.apiKey) {
+			const apiKey = new ApiKeyStrategy(config.apiKey);
+			strategies.access_tokens = apiKey;
+			strategies["api-key"] = apiKey;
+		}
 	}
 
 	const manager = new AuthManager({
-		defaultStrategy: config.defaultStrategy ?? "jwt",
-		strategies,
+		default:
+			config.default ?? config.defaultStrategy ?? Object.keys(strategies)[0],
+		guards: strategies,
 	});
 
 	return {

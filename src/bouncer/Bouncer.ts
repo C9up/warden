@@ -15,6 +15,7 @@ import type { UserPayload } from "../AuthManager.js";
 import { WardenError } from "../errors.js";
 import type { RightsResolver } from "../rights/RightsResolver.js";
 import type { EffectivePermissions, Scope } from "../rights/types.js";
+import { AbilitiesBuilder } from "./AbilitiesBuilder.js";
 import { AuthorizationResponse } from "./AuthorizationResponse.js";
 import type { BasePolicy } from "./BasePolicy.js";
 import { evaluate, isAction, throwAuthorizationFailure } from "./evaluate.js";
@@ -25,28 +26,63 @@ import type {
 	AbilityOptions,
 	AuthorizerResponse,
 	BouncerContext,
+	BouncerEmitter,
+	PolicyContainerResolver,
 } from "./types.js";
 
 export class Bouncer {
-	readonly #user: UserPayload | null;
+	readonly #userOrResolver: UserPayload | (() => UserPayload | null) | null;
+	/** Lazily-resolved user cache (`undefined` until `#getUser` runs). */
+	#user: UserPayload | null | undefined;
 	readonly #abilities: Record<string, Ability<never[]>>;
 	readonly #policies: Record<string, new () => BasePolicy>;
 	readonly #scope: Scope;
 	readonly #resolver: RightsResolver | undefined;
+	readonly #containerResolver: PolicyContainerResolver | undefined;
+	readonly #emitter: BouncerEmitter | undefined;
 	/** Memoized resolution — a Bouncer is fixed per `(user, scope)`, so resolve once (D3). */
 	#resolved: Promise<EffectivePermissions> | undefined;
 
 	constructor(
-		user: UserPayload | null,
+		user: UserPayload | (() => UserPayload | null) | null,
 		abilities?: Record<string, Ability<never[]>>,
 		policies?: Record<string, new () => BasePolicy>,
 		context?: BouncerContext,
 	) {
-		this.#user = user;
+		this.#userOrResolver = user;
 		this.#abilities = abilities ?? {};
 		this.#policies = policies ?? {};
 		this.#scope = context?.scope ?? "global";
 		this.#resolver = context?.resolver;
+		this.#containerResolver = context?.containerResolver;
+		this.#emitter = context?.emitter;
+	}
+
+	/**
+	 * Resolve the user, lazily invoking a resolver callback once and memoizing
+	 * the result (Adonis `#getUser`). A plain `UserPayload | null` passes through.
+	 */
+	#getUser(): UserPayload | null {
+		if (this.#user === undefined) {
+			this.#user =
+				typeof this.#userOrResolver === "function"
+					? this.#userOrResolver()
+					: this.#userOrResolver;
+		}
+		return this.#user;
+	}
+
+	/**
+	 * Define an ability and open a chainable {@link AbilitiesBuilder} (Adonis
+	 * `Bouncer.define`). Read `.abilities` off the returned builder to pass into a
+	 * `new Bouncer(user, abilities)`.
+	 */
+	static define<Args extends unknown[]>(
+		name: string,
+		authorizer: (user: UserPayload, ...args: Args) => AuthorizerResponse,
+		options?: AbilityOptions,
+	): AbilitiesBuilder {
+		return new AbilitiesBuilder().define(name, authorizer, options);
 	}
 
 	/** The active resolution scope (default `"global"`). */
@@ -62,9 +98,10 @@ export class Bouncer {
 	 */
 	#resolvePermissions(): Promise<EffectivePermissions> {
 		if (this.#resolved === undefined) {
+			const user = this.#getUser();
 			this.#resolved =
-				this.#resolver !== undefined && this.#user !== null
-					? this.#resolver.resolve(this.#user, this.#scope)
+				this.#resolver !== undefined && user !== null
+					? this.#resolver.resolve(user, this.#scope)
 					: Promise.resolve(emptyPermissions(this.#scope));
 		}
 		return this.#resolved;
@@ -120,17 +157,40 @@ export class Bouncer {
 		return AuthorizationResponse.deny(message, status);
 	}
 
-	/** Open a policy for checks (D8 — fresh `new PolicyClass()` per check). */
+	/** Open a policy for checks (D8 — fresh policy instance per check). */
 	with(policy: (new () => BasePolicy) | string): PolicyAuthorizer {
 		const factory =
 			typeof policy === "string"
 				? this.#resolvePolicyClass(policy)
-				: () => new policy();
+				: () => this.#construct(policy);
 		// The PolicyAuthorizer inherits the Bouncer's scope + the shared memoized
 		// resolve so every policy check sees the active `(user, scope)` (AC1/AC3).
-		return new PolicyAuthorizer(this.#user, factory, this.#scope, () =>
-			this.#resolvePermissions(),
+		return new PolicyAuthorizer(
+			this.#getUser(),
+			factory,
+			this.#scope,
+			() => this.#resolvePermissions(),
+			this.#emitter,
 		);
+	}
+
+	/**
+	 * Construct a policy instance via the container resolver when present (Adonis
+	 * DI parity), else a plain `new Policy()` (D8 — a fresh instance per check).
+	 */
+	#construct(ctor: new () => BasePolicy): Promise<BasePolicy> {
+		return this.#containerResolver !== undefined
+			? this.#containerResolver.make(ctor)
+			: Promise.resolve(new ctor());
+	}
+
+	/** Emit `authorization:finished` when an emitter is wired (no-op otherwise). */
+	#emit(action: string, response: AuthorizationResponse): void {
+		this.#emitter?.emit("authorization:finished", {
+			user: this.#getUser(),
+			action,
+			response,
+		});
 	}
 
 	/** Run an ability check and resolve to the full response. */
@@ -194,13 +254,16 @@ export class Bouncer {
 	): Promise<AuthorizationResponse> {
 		const resolved =
 			typeof ability === "string" ? this.#resolveAbility(ability) : ability;
-		return evaluate({
-			user: this.#user,
-			action: typeof ability === "string" ? ability : "(ability)",
+		const action = typeof ability === "string" ? ability : "(ability)";
+		const response = await evaluate({
+			user: this.#getUser(),
+			action,
 			allowGuest: resolved.allowGuest,
 			run: (user) => resolved.execute(user, ...args),
 			args,
 		});
+		this.#emit(action, response);
+		return response;
 	}
 
 	#resolveAbility(name: string): Ability<never[]> {
@@ -215,7 +278,7 @@ export class Bouncer {
 		return found;
 	}
 
-	#resolvePolicyClass(name: string): () => BasePolicy {
+	#resolvePolicyClass(name: string): () => Promise<BasePolicy> {
 		// Lazy: the lookup runs when a verb constructs the policy, so an unknown
 		// name surfaces as a promise rejection (like every other verb error),
 		// not a synchronous throw at `with()` time.
@@ -230,7 +293,7 @@ export class Bouncer {
 					},
 				);
 			}
-			return new ctor();
+			return this.#construct(ctor);
 		};
 	}
 }

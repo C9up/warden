@@ -168,7 +168,9 @@ describe("warden > wardenMiddleware — bearer token extraction", () => {
 
 		expect(next.called).toBe(false);
 		expect(response.status).toBe(401);
-		expect(response.body).toMatchObject({ error: { code: "UNAUTHORIZED" } });
+		expect(response.body).toMatchObject({
+			error: { code: "E_UNAUTHORIZED_ACCESS" },
+		});
 	});
 
 	it("authenticates with a valid Bearer token", async () => {
@@ -184,7 +186,8 @@ describe("warden > wardenMiddleware — bearer token extraction", () => {
 
 		expect(next.called).toBe(true);
 		expect(response.status).toBeUndefined();
-		expect(ctx.auth).toEqual(okUser);
+		expect(ctx.auth?.isAuthenticated).toBe(true);
+		expect(ctx.auth?.user).toEqual(okUser.user);
 	});
 
 	it("rejects an invalid Bearer token with 401", async () => {
@@ -293,7 +296,8 @@ describe("warden > wardenMiddleware — api-key extraction", () => {
 		await wardenMiddleware(ctx, next.fn);
 
 		expect(next.called).toBe(true);
-		expect(ctx.auth).toEqual(okUser);
+		expect(ctx.auth?.isAuthenticated).toBe(true);
+		expect(ctx.auth?.user).toEqual(okUser.user);
 	});
 
 	it("matches headerName case-insensitively (configured 'X-Custom-Key' → incoming 'x-custom-key')", async () => {
@@ -320,7 +324,8 @@ describe("warden > wardenMiddleware — api-key extraction", () => {
 		await wardenMiddleware(ctx, next.fn);
 
 		expect(next.called).toBe(true);
-		expect(ctx.auth).toEqual(okUser);
+		expect(ctx.auth?.isAuthenticated).toBe(true);
+		expect(ctx.auth?.user).toEqual(okUser.user);
 	});
 
 	it("falls back to 'x-api-key' when no api-key strategy is registered", async () => {
@@ -352,7 +357,8 @@ describe("warden > wardenMiddleware — api-key extraction", () => {
 		await wardenMiddleware(ctx, next.fn);
 
 		expect(next.called).toBe(true);
-		expect(ctx.auth).toEqual(okUser);
+		expect(ctx.auth?.isAuthenticated).toBe(true);
+		expect(ctx.auth?.user).toEqual(okUser.user);
 	});
 });
 
@@ -403,7 +409,8 @@ describe("warden > wardenMiddleware — strategy iteration", () => {
 		await wardenMiddleware(ctx, next.fn);
 
 		expect(next.called).toBe(true);
-		expect(ctx.auth).toEqual(okUser);
+		expect(ctx.auth?.isAuthenticated).toBe(true);
+		expect(ctx.auth?.user).toEqual(okUser.user);
 	});
 
 	it("swallows strategy throws and continues to the next strategy", async () => {
@@ -431,7 +438,8 @@ describe("warden > wardenMiddleware — strategy iteration", () => {
 
 		await wardenMiddleware(ctx, next.fn);
 		expect(next.called).toBe(true);
-		expect(ctx.auth).toEqual(okUser);
+		expect(ctx.auth?.isAuthenticated).toBe(true);
+		expect(ctx.auth?.user).toEqual(okUser.user);
 	});
 
 	it("returns 401 when every strategy rejects", async () => {
@@ -583,10 +591,8 @@ describe("warden > wardenMiddleware — session strategy", () => {
 		await wardenMiddleware(ctx, next.fn);
 
 		expect(next.called).toBe(true);
-		expect(ctx.auth).toMatchObject({
-			authenticated: true,
-			user: { id: "u-session" },
-		});
+		expect(ctx.auth?.isAuthenticated).toBe(true);
+		expect(ctx.auth?.user).toMatchObject({ id: "u-session" });
 	});
 
 	it("rejects with 401 when session strategy returns unauthenticated", async () => {
@@ -641,7 +647,7 @@ describe("warden > wardenMiddleware — session strategy", () => {
 		await wardenMiddleware(ctx, next.fn);
 
 		expect(next.called).toBe(true);
-		const user = Reflect.get(ctx.auth ?? {}, "user") ?? {};
+		const user = ctx.auth?.user ?? {};
 		expect(Reflect.get(user, "id")).toBe("u1");
 		// The dangerous own-key is stripped.
 		expect(Object.hasOwn(user, "constructor")).toBe(false);
@@ -963,7 +969,7 @@ describe("warden > silentAuth", () => {
 		});
 		await silentAuth(ctx, next.fn);
 		expect(next.called).toBe(true);
-		expect(ctx.auth?.authenticated).toBe(true);
+		expect(ctx.auth?.isAuthenticated).toBe(true);
 		expect(ctx.auth?.user?.id).toBe("u1");
 		expect(response.status).toBeUndefined();
 	});
@@ -974,7 +980,10 @@ describe("warden > silentAuth", () => {
 		});
 		await silentAuth(ctx, next.fn);
 		expect(next.called).toBe(true);
-		expect(ctx.auth).toBeUndefined();
+		// AdonisJS parity: silentAuth always attaches the Authenticator (so inline
+		// handlers can call ctx.auth.authenticate()); a guest is `isAuthenticated:false`.
+		expect(ctx.auth?.isAuthenticated).toBe(false);
+		expect(ctx.auth?.user).toBeUndefined();
 		expect(response.status).toBeUndefined();
 	});
 
@@ -985,7 +994,7 @@ describe("warden > silentAuth", () => {
 		});
 		await silentAuth(ctx, next.fn);
 		expect(next.called).toBe(true);
-		expect(ctx.auth).toBeUndefined();
+		expect(ctx.auth?.isAuthenticated).toBe(false);
 		expect(response.status).toBeUndefined();
 	});
 

@@ -15,13 +15,16 @@
  *   })
  */
 
-import type { UserPayload } from "./AuthManager.js";
+import type { AuthStrategy, UserPayload } from "./AuthManager.js";
 import type { BasePolicy } from "./bouncer/BasePolicy.js";
 import type { Ability } from "./bouncer/types.js";
 import type { MfaManager } from "./mfa/MfaManager.js";
 import type { RightsStore, Scope } from "./rights/types.js";
 import type { ApiKeyConfig } from "./strategies/ApiKeyStrategy.js";
+import { ApiKeyStrategy } from "./strategies/ApiKeyStrategy.js";
+import { JwtStrategy } from "./strategies/JwtStrategy.js";
 import type { SessionStrategyConfig } from "./strategies/SessionStrategy.js";
+import { SessionStrategy } from "./strategies/SessionStrategy.js";
 import type { TokenBlacklist } from "./TokenBlacklist.js";
 
 /**
@@ -50,10 +53,51 @@ export interface JwtConfig {
 	blacklist?: TokenBlacklist;
 }
 
+/**
+ * A guard entry in the AdonisJS-style config — an {@link AuthStrategy} instance,
+ * built via {@link jwtGuard}/{@link sessionGuard}/{@link apiKeyGuard}. Named a
+ * "factory" for AdonisJS symmetry (`sessionGuard({...})`), though Warden guards
+ * are shared per-app instances (the per-request state lives on the Authenticator).
+ */
+export type GuardFactory = AuthStrategy;
+
+/** Build a JWT guard from its config (AdonisJS `jwtGuard()` shape). */
+export function jwtGuard(config: JwtConfig): GuardFactory {
+	return new JwtStrategy(config);
+}
+
+/** Build a session guard from its config (AdonisJS `sessionGuard()` shape). */
+export function sessionGuard(config: SessionStrategyConfig): GuardFactory {
+	return new SessionStrategy(config);
+}
+
+/** Build an API-key / access-tokens guard from its config. */
+export function apiKeyGuard(config: ApiKeyConfig): GuardFactory {
+	return new ApiKeyStrategy(config);
+}
+
 export interface WardenConfig {
-	/** Default auth strategy (default: 'jwt'). */
+	/**
+	 * AdonisJS-style default guard NAME — the key in {@link WardenConfig.guards}
+	 * used when a route/call names none. Preferred over {@link
+	 * WardenConfig.defaultStrategy}.
+	 */
+	default?: string;
+	/**
+	 * AdonisJS-style named guard map, e.g.
+	 * `{ web: sessionGuard({...}), api: jwtGuard({...}) }`. Guards are named by
+	 * YOU (multiple instances of the same driver are allowed). When supplied,
+	 * this takes precedence over the driver-keyed `jwt`/`session`/`apiKey` fields.
+	 */
+	guards?: Record<string, GuardFactory>;
+	/**
+	 * Login route an HTML client is redirected to when a session-guarded request
+	 * is unauthenticated (AdonisJS session renderer parity). Absent ⇒ 401 JSON.
+	 */
+	loginRoute?: string;
+	/** Legacy default auth strategy name (default: 'jwt'). Prefer {@link WardenConfig.default}. */
 	defaultStrategy?: string;
-	/** JWT strategy configuration. */
+	/** JWT strategy configuration (legacy driver-keyed form). */
 	jwt?: JwtConfig;
 	/**
 	 * Session strategy configuration. Supply `findUser` so `@Guard('session')`

@@ -26,8 +26,8 @@ describe("warden > bouncer > parity (AC-E2)", () => {
 		expect(await new Bouncer(null).allows(guestAllowed)).toBe(true);
 	});
 
-	it("AuthorizationResponse.deny defaults to 403; allow() carries no status", () => {
-		expect(AuthorizationResponse.deny().status).toBe(403);
+	it("AuthorizationResponse.deny carries no status unless passed; allow() carries no status", () => {
+		expect(AuthorizationResponse.deny().status).toBeUndefined();
 		expect(AuthorizationResponse.deny("m", 404).status).toBe(404);
 		expect(AuthorizationResponse.allow().status).toBeUndefined();
 	});

@@ -115,7 +115,7 @@ describe("warden > AuthManager", () => {
 		// at construction so the operator gets a clear actionable boot error.
 		expect(
 			() => new AuthManager({ defaultStrategy: "jwt", strategies: {} }),
-		).toThrow(/INVALID_CONFIG|no authentication strategies registered/);
+		).toThrow(/INVALID_CONFIG|no authentication guards registered/);
 	});
 
 	it("throws on unknown strategy lookup against a populated registry", () => {

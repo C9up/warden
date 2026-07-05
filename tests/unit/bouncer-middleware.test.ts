@@ -1,5 +1,7 @@
 import "reflect-metadata";
 import { describe, expect, it } from "vitest";
+import { Authenticator } from "../../src/Authenticator.js";
+import { AuthManager, type AuthStrategy } from "../../src/AuthManager.js";
 import { Bouncer } from "../../src/bouncer/Bouncer.js";
 import {
 	type BouncerRegistry,
@@ -48,11 +50,34 @@ function buildCtx(opts: {
 	const ctx: WardenContext = {
 		request: { headers: () => ({}) },
 		response: { status() {}, json() {} },
-		auth: opts.user ? { authenticated: true, user: opts.user } : undefined,
 		containerResolver,
 	};
+	// `ctx.auth` is the per-request Authenticator (Ream's `auth` slot). Seed it
+	// with the test user via the internal `adopt()` so `initializeBouncer` reads
+	// `ctx.auth.user` exactly as it would after a real authentication.
+	if (opts.user) {
+		const authenticator = new Authenticator(ctx, authManagerStub);
+		authenticator.adopt({ authenticated: true, user: opts.user }, "jwt");
+		ctx.auth = authenticator;
+	}
 	return { ctx, next };
 }
+
+/** Inert AuthManager — the Bouncer path never calls verify(); it only reads ctx.auth.user. */
+const authManagerStub = new AuthManager({
+	default: "jwt",
+	guards: {
+		jwt: {
+			name: "jwt",
+			async authenticate() {
+				return { authenticated: false };
+			},
+			async verify() {
+				return { authenticated: false };
+			},
+		} satisfies AuthStrategy,
+	},
+});
 
 describe("warden > initializeBouncer", () => {
 	it("attaches a per-request Bouncer and calls next()", async () => {
