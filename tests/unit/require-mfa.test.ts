@@ -59,7 +59,7 @@ function run(manager: AuthManager) {
 		// Ream exposes the controller/method under `ctx.route` (Adonis shape).
 		route: { controller: SensitiveController.prototype, action: "transfer" },
 		containerResolver: {
-			make(token) {
+			async make(token) {
 				if (token === AuthManager) return manager;
 				throw new Error(`No binding for ${String(token)}`);
 			},

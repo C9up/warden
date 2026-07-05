@@ -38,7 +38,7 @@ function buildCtx(opts: {
 	if (opts.resolver) bindings.set(RightsResolver, opts.resolver);
 	if (opts.registry) bindings.set("bouncer:registry", opts.registry);
 	const containerResolver: WardenContext["containerResolver"] = {
-		make(token) {
+		async make(token) {
 			if (bindings.has(token)) return bindings.get(token);
 			throw new Error(`No binding for ${String(token)}`);
 		},

@@ -69,7 +69,7 @@ type ResolvableToken =
  * misconfigured kernel) yields no resolution: guarded routes fail CLOSED.
  */
 interface ContainerResolver {
-	make(token: ResolvableToken): unknown;
+	make(token: ResolvableToken): Promise<unknown>;
 }
 
 /**
@@ -137,9 +137,12 @@ export interface WardenContext {
  * AuthManager gate in `wardenMiddleware`). No `@c9up/ream` import: warden reads
  * only from the context Ream hands it.
  */
-function resolveFromCtx(ctx: WardenContext, token: ResolvableToken): unknown {
+async function resolveFromCtx(
+	ctx: WardenContext,
+	token: ResolvableToken,
+): Promise<unknown> {
 	try {
-		return ctx.containerResolver?.make(token);
+		return await ctx.containerResolver?.make(token);
 	} catch {
 		return undefined;
 	}
@@ -162,7 +165,7 @@ type WardenNext = () => Promise<void> | void;
  * and authenticates + authorizes the request.
  */
 export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
-	const resolvedAuth = resolveFromCtx(ctx, AuthManager);
+	const resolvedAuth = await resolveFromCtx(ctx, AuthManager);
 	if (!(resolvedAuth instanceof AuthManager)) {
 		// Fail CLOSED — a missing AuthManager (WardenProvider not registered, or
 		// no `ctx.containerResolver` on a non-Ream host) must never silently let
@@ -320,7 +323,7 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
  * request as a guest (`ctx.auth` unset) — silent auth is non-enforcing.
  */
 export async function silentAuth(ctx: WardenContext, next: WardenNext) {
-	const resolvedAuth = resolveFromCtx(ctx, AuthManager);
+	const resolvedAuth = await resolveFromCtx(ctx, AuthManager);
 	// Non-enforcing: a host without warden wired runs as guest. (Enforcement
 	// middlewares fail CLOSED on a missing AuthManager; silent auth does not.)
 	if (!(resolvedAuth instanceof AuthManager)) {
@@ -396,9 +399,9 @@ export async function initializeBouncer(ctx: WardenContext, next: WardenNext) {
 	// Both dependencies are registered by WardenProvider. Resolve defensively:
 	// a host that wired the middleware but not the provider gets an empty Bouncer
 	// (no abilities/resolver) rather than a crash on every request.
-	const resolved = tryResolve(ctx, RightsResolver);
+	const resolved = await tryResolve(ctx, RightsResolver);
 	const resolver = resolved instanceof RightsResolver ? resolved : undefined;
-	const candidate = tryResolve(ctx, "bouncer:registry");
+	const candidate = await tryResolve(ctx, "bouncer:registry");
 	const registry = isBouncerRegistry(candidate) ? candidate : undefined;
 
 	const user = ctx.auth?.user ?? null;
@@ -414,7 +417,10 @@ export async function initializeBouncer(ctx: WardenContext, next: WardenNext) {
 }
 
 /** Resolve a container token from the request resolver, returning undefined instead of throwing when absent. */
-function tryResolve(ctx: WardenContext, token: ResolvableToken): unknown {
+async function tryResolve(
+	ctx: WardenContext,
+	token: ResolvableToken,
+): Promise<unknown> {
 	return resolveFromCtx(ctx, token);
 }
 
@@ -435,7 +441,7 @@ function isBouncerRegistry(value: unknown): value is BouncerRegistry {
  * hardcoded "global" and tenant-scoped roles/grants never satisfied @Role/@Permission.
  */
 async function resolveRequestScope(ctx: WardenContext): Promise<Scope> {
-	const candidate = tryResolve(ctx, "bouncer:registry");
+	const candidate = await tryResolve(ctx, "bouncer:registry");
 	const registry = isBouncerRegistry(candidate) ? candidate : undefined;
 	return registry?.resolveScope
 		? await registry.resolveScope(toScopeContext(ctx))

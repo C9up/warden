@@ -47,7 +47,7 @@ function buildCtx(opts: BuildCtxOpts): {
 	bindings.set(AuthManager, opts.manager);
 	if (opts.registry) bindings.set("bouncer:registry", opts.registry);
 	const containerResolver: WardenContext["containerResolver"] = {
-		make(token) {
+		async make(token) {
 			if (bindings.has(token)) return bindings.get(token);
 			// Mirror Ream's container: an unbound token throws (warden catches
 			// and treats it as "not registered").
@@ -928,7 +928,7 @@ describe("warden > Ream ctx integration (regression)", () => {
 			controller: SecureController.prototype,
 			action: "secret",
 			containerResolver: {
-				make(token) {
+				async make(token) {
 					if (token === AuthManager) return makeManager({});
 					throw new Error(`No binding for ${String(token)}`);
 				},
@@ -997,7 +997,7 @@ describe("warden > silentAuth", () => {
 		// Drop the AuthManager binding — silent auth must NOT throw (unlike the
 		// enforcing wardenMiddleware, which fails closed).
 		ctx.containerResolver = {
-			make(token) {
+			async make(token) {
 				throw new Error(`No binding for ${String(token)}`);
 			},
 		};
