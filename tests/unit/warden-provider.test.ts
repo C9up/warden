@@ -16,7 +16,7 @@ type Token = unknown;
 
 interface FakeContainer {
 	singleton(token: Token, factory: SingletonFactory): void;
-	resolve(token: Token): unknown;
+	resolve(token: Token): Promise<unknown>;
 	registry: Map<Token, SingletonFactory>;
 	instances: Map<Token, unknown>;
 }
@@ -30,11 +30,11 @@ function makeFakeContainer(): FakeContainer {
 		singleton(token, factory) {
 			registry.set(token, factory);
 		},
-		resolve(token) {
+		async resolve(token) {
 			if (instances.has(token)) return instances.get(token);
 			const factory = registry.get(token);
 			if (!factory) throw new Error("not registered");
-			const value = factory();
+			const value = await factory();
 			instances.set(token, value);
 			return value;
 		},
@@ -80,7 +80,7 @@ describe("warden > WardenProvider", () => {
 		);
 	});
 
-	it("registers JwtStrategy + AuthManager when jwt config is provided", () => {
+	it("registers JwtStrategy + AuthManager when jwt config is provided", async () => {
 		const { container, app } = makeFakeApp({
 			defaultStrategy: "jwt",
 			jwt: validJwtConfig,
@@ -90,17 +90,17 @@ describe("warden > WardenProvider", () => {
 		expect(container.registry.has(JwtStrategy)).toBe(true);
 		expect(container.registry.has(AuthManager)).toBe(true);
 
-		const jwt = container.resolve(JwtStrategy);
+		const jwt = await container.resolve(JwtStrategy);
 		expect(jwt).toBeInstanceOf(JwtStrategy);
 
-		const manager = container.resolve(AuthManager);
+		const manager = await container.resolve(AuthManager);
 		expect(manager).toBeInstanceOf(AuthManager);
 		if (manager instanceof AuthManager) {
 			expect(() => manager.getStrategy("jwt")).not.toThrow();
 		}
 	});
 
-	it("binds the AuthManager under the 'auth' string alias (consumers resolve by name)", () => {
+	it("binds the AuthManager under the 'auth' string alias (consumers resolve by name)", async () => {
 		// @c9up/station resolves container.resolve("auth") to gate its admin
 		// routes — it can't import the AuthManager class (stays warden-
 		// agnostic). Without this alias the resolve threw and Station's auth
@@ -113,24 +113,24 @@ describe("warden > WardenProvider", () => {
 		new WardenProvider(app).register();
 
 		expect(container.registry.has("auth")).toBe(true);
-		const viaAlias = container.resolve("auth");
-		const viaClass = container.resolve(AuthManager);
+		const viaAlias = await container.resolve("auth");
+		const viaClass = await container.resolve(AuthManager);
 		expect(viaAlias).toBeInstanceOf(AuthManager);
 		expect(viaAlias).toBe(viaClass);
 	});
 
-	it("falls back to defaultStrategy='jwt' when config omits it", () => {
+	it("falls back to defaultStrategy='jwt' when config omits it", async () => {
 		const { container, app } = makeFakeApp({ jwt: validJwtConfig });
 		new WardenProvider(app).register();
 
-		const manager = container.resolve(AuthManager);
+		const manager = await container.resolve(AuthManager);
 		expect(manager).toBeInstanceOf(AuthManager);
 		if (manager instanceof AuthManager) {
 			expect(() => manager.getStrategy("jwt")).not.toThrow();
 		}
 	});
 
-	it("registers MemoryRightsStore + RightsResolver singletons (Epic 56)", () => {
+	it("registers MemoryRightsStore + RightsResolver singletons (Epic 56)", async () => {
 		const { container, app } = makeFakeApp({
 			defaultStrategy: "jwt",
 			jwt: validJwtConfig,
@@ -139,10 +139,12 @@ describe("warden > WardenProvider", () => {
 
 		expect(container.registry.has(MemoryRightsStore)).toBe(true);
 		expect(container.registry.has(RightsResolver)).toBe(true);
-		expect(container.resolve(MemoryRightsStore)).toBeInstanceOf(
+		expect(await container.resolve(MemoryRightsStore)).toBeInstanceOf(
 			MemoryRightsStore,
 		);
-		expect(container.resolve(RightsResolver)).toBeInstanceOf(RightsResolver);
+		expect(await container.resolve(RightsResolver)).toBeInstanceOf(
+			RightsResolver,
+		);
 	});
 
 	it("resolves an AuthManager whose hasPermission consults the registered resolver", async () => {
@@ -154,12 +156,12 @@ describe("warden > WardenProvider", () => {
 
 		// Seed the registered store (resolvable by class so an app seeds at boot),
 		// then resolve the AuthManager — it must read the SAME backing store.
-		const store = container.resolve(MemoryRightsStore);
+		const store = await container.resolve(MemoryRightsStore);
 		expect(store).toBeInstanceOf(MemoryRightsStore);
 		if (!(store instanceof MemoryRightsStore)) return;
 		store.defineRole("editor", ["post.edit"]).assignRole("u1", "editor");
 
-		const manager = container.resolve(AuthManager);
+		const manager = await container.resolve(AuthManager);
 		expect(manager).toBeInstanceOf(AuthManager);
 		if (!(manager instanceof AuthManager)) return;
 		const user: UserPayload = { id: "u1" };
@@ -176,7 +178,7 @@ describe("warden > WardenProvider", () => {
 		});
 		new WardenProvider(app).register();
 
-		const manager = container.resolve(AuthManager);
+		const manager = await container.resolve(AuthManager);
 		expect(manager).toBeInstanceOf(AuthManager);
 		if (!(manager instanceof AuthManager)) return;
 		const user: UserPayload = { id: "u1" };
@@ -184,7 +186,7 @@ describe("warden > WardenProvider", () => {
 		expect(await manager.hasPermission(user, "from.custom.store")).toBe(true);
 	});
 
-	it("registers SessionStrategy under 'session' when config.session is provided", () => {
+	it("registers SessionStrategy under 'session' when config.session is provided", async () => {
 		const { container, app } = makeFakeApp({
 			jwt: validJwtConfig,
 			session: {
@@ -196,14 +198,14 @@ describe("warden > WardenProvider", () => {
 		new WardenProvider(app).register();
 
 		expect(container.registry.has(SessionStrategy)).toBe(true);
-		const manager = container.resolve(AuthManager);
+		const manager = await container.resolve(AuthManager);
 		if (manager instanceof AuthManager) {
 			// Previously @Guard('session') crashed with STRATEGY_NOT_FOUND.
 			expect(() => manager.getStrategy("session")).not.toThrow();
 		}
 	});
 
-	it("registers ApiKeyStrategy under 'api-key' when config.apiKey is provided", () => {
+	it("registers ApiKeyStrategy under 'api-key' when config.apiKey is provided", async () => {
 		const { container, app } = makeFakeApp({
 			jwt: validJwtConfig,
 			apiKey: {
@@ -215,13 +217,13 @@ describe("warden > WardenProvider", () => {
 		new WardenProvider(app).register();
 
 		expect(container.registry.has(ApiKeyStrategy)).toBe(true);
-		const manager = container.resolve(AuthManager);
+		const manager = await container.resolve(AuthManager);
 		if (manager instanceof AuthManager) {
 			expect(() => manager.getStrategy("api-key")).not.toThrow();
 		}
 	});
 
-	it("boots a session-only app (no jwt) and defaults to the 'session' strategy", () => {
+	it("boots a session-only app (no jwt) and defaults to the 'session' strategy", async () => {
 		const { container, app } = makeFakeApp({
 			session: {
 				async findUser() {
@@ -231,7 +233,7 @@ describe("warden > WardenProvider", () => {
 		});
 		expect(() => new WardenProvider(app).register()).not.toThrow();
 
-		const manager = container.resolve(AuthManager);
+		const manager = await container.resolve(AuthManager);
 		expect(manager).toBeInstanceOf(AuthManager);
 		if (manager instanceof AuthManager) {
 			expect(() => manager.getStrategy()).not.toThrow(); // default → session

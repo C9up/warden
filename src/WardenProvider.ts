@@ -12,7 +12,7 @@ import { SessionStrategy } from "./strategies/SessionStrategy.js";
 
 interface WardenContainer {
 	singleton(token: unknown, factory: () => unknown): void;
-	resolve(token: unknown): unknown;
+	resolve(token: unknown): Promise<unknown>;
 }
 
 interface WardenConfigStore {
@@ -151,6 +151,7 @@ export default class WardenProvider {
 	}
 
 	async boot() {
-		setAuth(this.app.container.resolve(AuthManager) as AuthManager);
+		const manager = await this.app.container.resolve(AuthManager);
+		if (manager instanceof AuthManager) setAuth(manager);
 	}
 }
