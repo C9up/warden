@@ -112,11 +112,31 @@ export interface WardenContext {
 	/** Session store — set by a session middleware upstream. */
 	session?: SessionStore;
 	/**
-	 * The per-request {@link Authenticator} (Ream's `auth` slot). `silentAuth`
-	 * (global) or `wardenMiddleware` (per guarded route) sets it; inline handlers
-	 * then call `ctx.auth.authenticate()` / `ctx.auth.use('session').login(user)`.
+	 * Ream's `ctx.auth` slot. Typed STRUCTURALLY (agnostic — like `bouncer` below),
+	 * NOT as the concrete {@link Authenticator}: that class has `#private` fields,
+	 * which makes it nominal, so Ream's `HttpContext.auth` (an `AuthState`) could
+	 * never satisfy it and warden's middleware would fail to typecheck as a Ream
+	 * `MiddlewareClass`. `silentAuth`/`wardenMiddleware` fill it with a concrete
+	 * `Authenticator` (narrowed here via `instanceof`); inline handlers then call
+	 * `ctx.auth.authenticate()` / `ctx.auth.use('session').login(user)` on it.
 	 */
-	auth?: Authenticator;
+	auth?: {
+		isAuthenticated?: boolean;
+		user?: {
+			id: string;
+			email?: string;
+			roles?: string[];
+			permissions?: string[];
+			[key: string]: unknown;
+		};
+		roles?: string[];
+		permissions?: string[];
+		authenticate?(): Promise<void>;
+		check?(): Promise<boolean>;
+		getUserOrFail?(): { id: string; [key: string]: unknown } | undefined;
+		use?(name: string): unknown;
+		readonly authenticationAttempted?: boolean;
+	};
 	/**
 	 * Per-request authorization entry point — set by `initializeBouncer`. Typed
 	 * as the agnostic {@link Authorizer} contract (Ream's `ctx.bouncer` slot),
