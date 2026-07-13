@@ -68,6 +68,7 @@
     "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.10",
     "@types/node": "^22.19.15",
     "reflect-metadata": "^0.2.2",
     "typescript": "^6.0.2",
