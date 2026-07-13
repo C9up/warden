@@ -96,9 +96,37 @@ export class OtpProvider {
 		}
 		this.#channel = config.channel;
 		this.#store = config.store ?? new MemoryOtpChallengeStore();
-		this.#digits = config.digits ?? 6;
-		this.#ttlMs = (config.ttlSeconds ?? 300) * 1000;
-		this.#maxAttempts = config.maxAttempts ?? 5;
+
+		// Validate the numeric config up-front (mirrors TotpProvider's digit
+		// guard) so a misconfig fails loudly at construction instead of minting
+		// unusable codes: `digits` bounds the code length (also keeps `10**digits`
+		// within `randomInt`'s safe range); a non-positive `ttlSeconds` would make
+		// every code born-expired; a non-positive `maxAttempts` would burn the
+		// challenge on the first guess.
+		const digits = config.digits ?? 6;
+		if (!Number.isInteger(digits) || digits < 4 || digits > 10) {
+			throw new WardenError(
+				"INVALID_CONFIG",
+				`OTP digits must be an integer 4-10, got ${digits}`,
+			);
+		}
+		const ttlSeconds = config.ttlSeconds ?? 300;
+		if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1) {
+			throw new WardenError(
+				"INVALID_CONFIG",
+				`OTP ttlSeconds must be a positive integer, got ${ttlSeconds}`,
+			);
+		}
+		const maxAttempts = config.maxAttempts ?? 5;
+		if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+			throw new WardenError(
+				"INVALID_CONFIG",
+				`OTP maxAttempts must be a positive integer, got ${maxAttempts}`,
+			);
+		}
+		this.#digits = digits;
+		this.#ttlMs = ttlSeconds * 1000;
+		this.#maxAttempts = maxAttempts;
 	}
 
 	/** Mint a code, persist the challenge, and deliver it to `recipient`. */

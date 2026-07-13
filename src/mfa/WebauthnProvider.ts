@@ -81,10 +81,21 @@ export interface AuthenticationOptionsJSON {
 	}>;
 }
 
-/** Transient per-ceremony challenge storage. */
+/**
+ * Transient per-ceremony challenge storage.
+ *
+ * Implementations MUST be **time-bound**: a challenge that is never consumed has
+ * to expire server-side (single-use alone is not enough — an unconsumed
+ * challenge left live indefinitely widens the replay/relay window). A DB/Redis
+ * store should use a TTL column / `EXPIRE`; the in-memory default stamps an
+ * `expiresAt` and refuses an expired challenge in `take`.
+ */
 export interface WebauthnChallengeStore {
 	save(state: string, challenge: string): Promise<void>;
-	/** Return the challenge for `state` and remove it (single-use). */
+	/**
+	 * Return the challenge for `state` and remove it (single-use). MUST return
+	 * `null` if the stored challenge has passed its TTL.
+	 */
 	take(state: string): Promise<string | null>;
 }
 
@@ -109,14 +120,24 @@ export interface WebauthnCredentialStore {
 }
 
 export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
-	#store = new Map<string, string>();
+	#store = new Map<string, { challenge: string; expiresAt: number }>();
+	readonly #ttlMs: number;
+
+	/** @param ttlMs Server-side challenge lifetime. Default 5 min. */
+	constructor(ttlMs = 300_000) {
+		this.#ttlMs = ttlMs;
+	}
+
 	async save(state: string, challenge: string): Promise<void> {
-		this.#store.set(state, challenge);
+		this.#store.set(state, { challenge, expiresAt: Date.now() + this.#ttlMs });
 	}
 	async take(state: string): Promise<string | null> {
-		const c = this.#store.get(state) ?? null;
-		this.#store.delete(state);
-		return c;
+		const entry = this.#store.get(state);
+		this.#store.delete(state); // single-use regardless of freshness
+		if (!entry || entry.expiresAt < Date.now()) {
+			return null;
+		}
+		return entry.challenge;
 	}
 }
 
@@ -139,6 +160,12 @@ export class MemoryWebauthnCredentialStore implements WebauthnCredentialStore {
 	}
 }
 
+/** WebAuthn user-verification requirement (PIN / biometric). */
+export type UserVerificationRequirement =
+	| "required"
+	| "preferred"
+	| "discouraged";
+
 export interface WebauthnConfig {
 	/** Human-readable relying-party name (your app). */
 	rpName: string;
@@ -155,6 +182,13 @@ export interface WebauthnConfig {
 	 * Default ES256, RS256, EdDSA.
 	 */
 	supportedAlgorithms?: number[];
+	/**
+	 * User-verification requirement. Default `"preferred"`. Set `"required"`
+	 * for strong MFA / sensitive passkeys — the ceremony then requests UV AND
+	 * the server rejects an assertion whose authenticator-data UV flag is unset
+	 * (a mere user-presence touch no longer satisfies the check).
+	 */
+	userVerification?: UserVerificationRequirement;
 }
 
 export interface WebauthnUser {
@@ -172,6 +206,7 @@ export class WebauthnProvider {
 	readonly #origins: string[];
 	readonly #timeout: number;
 	readonly #algorithms: number[];
+	readonly #userVerification: UserVerificationRequirement;
 	readonly #challenges: WebauthnChallengeStore;
 	readonly #credentials: WebauthnCredentialStore;
 
@@ -189,6 +224,7 @@ export class WebauthnProvider {
 			: [config.origin];
 		this.#timeout = config.timeout ?? 60_000;
 		this.#algorithms = config.supportedAlgorithms ?? DEFAULT_ALGS;
+		this.#userVerification = config.userVerification ?? "preferred";
 		this.#challenges =
 			config.challengeStore ?? new MemoryWebauthnChallengeStore();
 		this.#credentials =
@@ -226,7 +262,7 @@ export class WebauthnProvider {
 			})),
 			authenticatorSelection: {
 				residentKey: "preferred",
-				userVerification: "preferred",
+				userVerification: this.#userVerification,
 			},
 		};
 		const state = randomBytes(16).toString("hex");
@@ -302,7 +338,7 @@ export class WebauthnProvider {
 			challenge,
 			timeout: this.#timeout,
 			rpId: this.#rpID,
-			userVerification: "preferred",
+			userVerification: this.#userVerification,
 			allowCredentials: userId
 				? allow.map((c) => ({
 						id: c.id,
@@ -397,13 +433,23 @@ export class WebauthnProvider {
 		);
 	}
 
-	/** Validate authenticator data: rpIdHash match and user-presence flag. */
+	/**
+	 * Validate authenticator data: rpIdHash match, mandatory user-presence, and
+	 * — when `userVerification: "required"` is configured — the user-verification
+	 * flag (PIN / biometric actually performed, not just a presence touch).
+	 */
 	#validAuthenticator(authData: {
 		rpIdHash: Buffer;
-		flags: { up: boolean };
+		flags: { up: boolean; uv: boolean };
 	}): boolean {
 		const expectedRpIdHash = sha256(Buffer.from(this.#rpID, "utf8"));
-		return authData.flags.up && expectedRpIdHash.equals(authData.rpIdHash);
+		if (!authData.flags.up || !expectedRpIdHash.equals(authData.rpIdHash)) {
+			return false;
+		}
+		if (this.#userVerification === "required" && !authData.flags.uv) {
+			return false;
+		}
+		return true;
 	}
 }
 

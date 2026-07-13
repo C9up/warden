@@ -19,6 +19,22 @@ class CapturingChannel implements OtpDeliveryChannel {
 }
 
 describe("warden > OtpProvider", () => {
+	it("rejects an out-of-range numeric config at construction", () => {
+		const channel = new CapturingChannel();
+		expect(() => new OtpProvider({ channel, digits: 2 })).toThrow(
+			/digits must be an integer 4-10/,
+		);
+		expect(() => new OtpProvider({ channel, digits: 12 })).toThrow(
+			/digits must be an integer 4-10/,
+		);
+		expect(() => new OtpProvider({ channel, ttlSeconds: 0 })).toThrow(
+			/ttlSeconds must be a positive integer/,
+		);
+		expect(() => new OtpProvider({ channel, maxAttempts: 0 })).toThrow(
+			/maxAttempts must be a positive integer/,
+		);
+	});
+
 	it("mints a code, delivers it, and verifies it once", async () => {
 		const channel = new CapturingChannel();
 		const otp = new OtpProvider({ channel, digits: 6 });

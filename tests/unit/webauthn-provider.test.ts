@@ -12,9 +12,10 @@ import {
 	type KeyObject,
 	randomBytes,
 } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	type AuthenticationResponseJSON,
+	MemoryWebauthnChallengeStore,
 	type RegistrationResponseJSON,
 	WebauthnProvider,
 } from "../../src/mfa/WebauthnProvider.js";
@@ -142,13 +143,15 @@ class FakeAuthenticator {
 		challenge: string,
 		signCount: number,
 		origin = ORIGIN,
+		flags = 0x05,
 	): AuthenticationResponseJSON {
 		const clientDataRaw = Buffer.from(
 			JSON.stringify({ type: "webauthn.get", challenge, origin }),
 			"utf8",
 		);
-		// flags: UP | UV (no attested credential data on assertion)
-		const authData = this.authData(0x05, signCount, false);
+		// flags default UP | UV (no attested credential data on assertion);
+		// callers pass 0x01 (UP only) to exercise the required-UV rejection.
+		const authData = this.authData(flags, signCount, false);
 		const signedData = Buffer.concat([authData, sha256(clientDataRaw)]);
 		const signature = cryptoSign("sha256", signedData, this.privateKey);
 		const id = b64url(this.credentialId);
@@ -318,5 +321,61 @@ describe("warden > WebauthnProvider — authentication", () => {
 			auth.authenticate(a2.options.challenge, 5),
 		);
 		expect(res.verified).toBe(false);
+	});
+});
+
+describe("warden > WebauthnProvider — challenge TTL", () => {
+	it("MemoryWebauthnChallengeStore refuses an expired challenge", async () => {
+		vi.useFakeTimers();
+		try {
+			const store = new MemoryWebauthnChallengeStore(1000);
+			await store.save("s1", "chal-1");
+			vi.advanceTimersByTime(1001);
+			expect(await store.take("s1")).toBeNull();
+
+			// A fresh challenge within the TTL is still returned once.
+			await store.save("s2", "chal-2");
+			expect(await store.take("s2")).toBe("chal-2");
+			expect(await store.take("s2")).toBeNull(); // single-use
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+describe("warden > WebauthnProvider — required user verification", () => {
+	it("rejects a UP-only assertion but accepts a UV assertion", async () => {
+		const p = new WebauthnProvider({
+			rpName: "Fluveo",
+			rpID: RP_ID,
+			origin: ORIGIN,
+			userVerification: "required",
+		});
+		const auth = new FakeAuthenticator();
+		const reg = await p.startRegistration(USER);
+		await p.finishRegistration(
+			reg.state,
+			USER.id,
+			auth.register(reg.options.challenge),
+		);
+
+		// The ceremony options must actually request required UV.
+		const a1 = await p.startAuthentication(USER.id);
+		expect(a1.options.userVerification).toBe("required");
+
+		// A user-presence-only assertion (flags 0x01, no UV) is rejected.
+		const upOnly = await p.finishAuthentication(
+			a1.state,
+			auth.authenticate(a1.options.challenge, 1, ORIGIN, 0x01),
+		);
+		expect(upOnly.verified).toBe(false);
+
+		// A UV assertion (flags 0x05) is accepted.
+		const a2 = await p.startAuthentication(USER.id);
+		const withUv = await p.finishAuthentication(
+			a2.state,
+			auth.authenticate(a2.options.challenge, 2, ORIGIN, 0x05),
+		);
+		expect(withUv.verified).toBe(true);
 	});
 });
