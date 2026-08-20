@@ -116,6 +116,7 @@ export {
 	MemoryWebauthnCredentialStore,
 	WebauthnProvider,
 } from "./mfa/WebauthnProvider.js";
+export { quasarConnection } from "./quasar.js";
 export type {
 	RedisBlacklistConfig,
 	RedisLikeClient,

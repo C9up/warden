@@ -26,13 +26,45 @@ export interface RedisBlacklistConfig {
 	prefix?: string;
 }
 
+/**
+ * Where the client comes from. A resolver is what lets the blacklist name its
+ * connection instead of being handed a client: config is read synchronously,
+ * the first revocation check is not.
+ */
+export type RedisClientSource =
+	| RedisLikeClient
+	| (() => RedisLikeClient | Promise<RedisLikeClient>);
+
 export class RedisBlacklistDriver implements BlacklistDriver {
-	readonly #client: RedisLikeClient;
+	readonly #source: RedisClientSource;
+	#resolved: RedisLikeClient | undefined;
+	#pending: Promise<RedisLikeClient> | undefined;
 	readonly #prefix: string;
 
-	constructor(client: RedisLikeClient, config: RedisBlacklistConfig = {}) {
-		this.#client = client;
+	constructor(source: RedisClientSource, config: RedisBlacklistConfig = {}) {
+		this.#source = source;
 		this.#prefix = config.prefix ?? "warden:blacklist:";
+	}
+
+	/**
+	 * The client, resolved once. Two requests racing on a cold start must not
+	 * each open their own connection, so the in-flight promise is shared.
+	 */
+	async #client(): Promise<RedisLikeClient> {
+		if (this.#resolved) return this.#resolved;
+		if (typeof this.#source !== "function") {
+			this.#resolved = this.#source;
+			return this.#resolved;
+		}
+		if (!this.#pending) {
+			const resolver = this.#source;
+			this.#pending = Promise.resolve(resolver()).then((client) => {
+				this.#resolved = client;
+				this.#pending = undefined;
+				return client;
+			});
+		}
+		return this.#pending;
 	}
 
 	/**
@@ -44,11 +76,13 @@ export class RedisBlacklistDriver implements BlacklistDriver {
 		if (ttlSeconds <= 0) {
 			return;
 		}
-		await this.#client.set(this.#key(jti), "1", "EX", ttlSeconds);
+		const client = await this.#client();
+		await client.set(this.#key(jti), "1", "EX", ttlSeconds);
 	}
 
 	async has(jti: string): Promise<boolean> {
-		return (await this.#client.exists(this.#key(jti))) > 0;
+		const client = await this.#client();
+		return (await client.exists(this.#key(jti))) > 0;
 	}
 
 	/** No-op: Redis/KeyDB evicts expired keys on its own. */
