@@ -27,20 +27,12 @@ function isConnectionSource(value: unknown): value is ConnectionSource {
 
 function isRedisLikeClient(value: unknown): value is RedisLikeClient {
 	if (typeof value !== "object" || value === null) return false;
-	// The commands this driver actually issues. A connection missing one of
-	// them would fail on the first revocation, far from the cause.
-	const required = [
-		"get",
-		"set",
-		"del",
-		"exists",
-		"keys",
-		"sadd",
-		"srem",
-		"smembers",
-		"expire",
-		"ttl",
-	];
+	// The commands this driver actually issues — the whole of `RedisLikeClient`.
+	// A connection missing one would fail on the first revocation, far from the
+	// cause. Nothing more: the driver documents itself as needing only `set`
+	// with an "EX" ttl and `exists`, so demanding sets or key scans here would
+	// reject a client that works perfectly well.
+	const required = ["set", "exists"];
 	return required.every(
 		(name) => typeof Reflect.get(value, name) === "function",
 	);
