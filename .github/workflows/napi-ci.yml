@@ -137,6 +137,35 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace
 
+  # Integration layer: the Redis-backed suites. They live outside the default
+  # vitest config because they skip without a server, and the smoke gate above
+  # requires zero skips. Run here against a real Redis so the JWT blacklist —
+  # the mechanism that keeps a revoked token revoked — is verified on every push
+  # rather than only on a developer's machine.
+  redis-integration:
+    name: Integration tests (live Redis)
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with: { version: 9 }
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - run: pnpm install
+      - run: pnpm test:integration
+        env:
+          REDIS_TEST_URL: redis://127.0.0.1:6379
+
   # Publish job — gated on workflow_dispatch (manual maintainer trigger).
   # Requires NPM_TOKEN secret + a v<MAJOR>.<MINOR>.<PATCH> tag at HEAD matching
   # package.json. Drift gate refuses to overwrite a published version (or roll
@@ -145,7 +174,7 @@ jobs:
     name: Publish to npm
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [quality, build-and-test, cargo-tests]
+    needs: [quality, build-and-test, cargo-tests, redis-integration]
     if: github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v6
