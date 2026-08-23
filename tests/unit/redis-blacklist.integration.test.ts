@@ -17,7 +17,35 @@ import { quasarConnection } from "../../src/quasar.js";
 import { RedisBlacklistDriver } from "../../src/RedisBlacklistDriver.js";
 
 const url = process.env.REDIS_TEST_URL ?? "";
-const describeRedis = url ? describe : describe.skip;
+
+/**
+ * Skipped, not failed, when no server answers: a URL can be set and point at
+ * nothing. Probed through quasar (a devDependency here) rather than ioredis,
+ * which warden deliberately does not depend on.
+ */
+async function serverAnswers(): Promise<boolean> {
+	const probe = new QuasarManager({
+		connection: "probe" as const,
+		// Fail fast instead of letting ioredis retry a dead port forever.
+		connections: {
+			probe: { url, lazyConnect: true, maxRetriesPerRequest: 1 },
+		},
+	});
+	try {
+		await probe.connection().ping();
+		return true;
+	} catch {
+		return false;
+	} finally {
+		// The one declared connection, by its literal name — `disconnect` is typed
+		// against the declared keys, so a plain string does not satisfy it.
+		await probe.disconnect("probe");
+	}
+}
+
+const live = url ? await serverAnswers() : false;
+
+const describeRedis = live ? describe : describe.skip;
 
 describeRedis("RedisBlacklistDriver against a live Redis", () => {
 	const prefix = `warden-test:${process.pid}:`;
@@ -38,7 +66,12 @@ describeRedis("RedisBlacklistDriver against a live Redis", () => {
 	});
 
 	afterAll(async () => {
-		await manager.quitAll();
+		// Closed one at a time rather than with quitAll(): CI resolves quasar from
+		// the registry, where the published version predates that method. quit(name)
+		// means the same in both.
+		// One declared connection, closed by its literal name: `quit` is typed
+		// against the declared keys, so a plain string does not satisfy it.
+		await manager.quit("main");
 		clearQuasar(manager);
 	});
 
