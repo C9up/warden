@@ -8,6 +8,7 @@ import type {
 	OAuthToken,
 	OAuthUser,
 } from "../types.js";
+import { assertOAuthState } from "../types.js";
 
 export class GoogleDriver implements FirstContactDriver {
 	constructor(private config: OAuthConfig) {}
@@ -30,9 +31,7 @@ export class GoogleDriver implements FirstContactDriver {
 		expectedState?: string,
 	): Promise<{ user: OAuthUser; token: OAuthToken }> {
 		// CSRF protection: validate state matches what we sent in redirectUrl().
-		if (expectedState && state !== expectedState) {
-			throw new Error("OAuth state mismatch — possible CSRF attack");
-		}
+		assertOAuthState(state, expectedState);
 		const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },

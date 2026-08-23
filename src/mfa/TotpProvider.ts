@@ -25,6 +25,57 @@ export interface TotpConfig {
 	 * tolerate clock skew. Default `1` (i.e. ±30s with the default period).
 	 */
 	window?: number;
+	/**
+	 * Remembers codes already accepted, so one cannot be used twice
+	 * (RFC 6238 §5.2). Defaults to an in-process guard, which is correct for a
+	 * single instance; inject a shared store (Redis, the session table) when the
+	 * app runs on several.
+	 *
+	 * Omit deliberately — `replayGuard: null` — to accept replays, e.g. when an
+	 * outer layer already enforces single use.
+	 */
+	replayGuard?: TotpReplayGuard | null;
+}
+
+/**
+ * Remembers accepted (secret, time-step) pairs for as long as they could still
+ * be replayed.
+ *
+ * Keys are opaque digests, never the secret itself: a store may be shared, and
+ * a guard that leaks the seed is worse than the replay it prevents.
+ */
+export interface TotpReplayGuard {
+	/** True when this exact code has already been accepted. */
+	used(key: string): boolean | Promise<boolean>;
+	/** Record it as used; `ttlMs` is how long it could still be replayed. */
+	remember(key: string, ttlMs: number): void | Promise<void>;
+}
+
+/**
+ * In-process replay guard. Entries expire on their own, and a sweep runs
+ * whenever one is added, so the set stays bounded by the accept window rather
+ * than by how many codes have been tried.
+ */
+export class MemoryTotpReplayGuard implements TotpReplayGuard {
+	readonly #seen = new Map<string, number>();
+
+	used(key: string): boolean {
+		const expiresAt = this.#seen.get(key);
+		if (expiresAt === undefined) return false;
+		if (expiresAt <= Date.now()) {
+			this.#seen.delete(key);
+			return false;
+		}
+		return true;
+	}
+
+	remember(key: string, ttlMs: number): void {
+		const now = Date.now();
+		for (const [seenKey, expiresAt] of this.#seen) {
+			if (expiresAt <= now) this.#seen.delete(seenKey);
+		}
+		this.#seen.set(key, now + ttlMs);
+	}
 }
 
 export interface TotpEnrollment {
@@ -43,10 +94,18 @@ const DEFAULTS = {
 
 export class TotpProvider {
 	readonly kind = "totp" as const;
-	readonly #cfg: Required<TotpConfig>;
+	readonly #cfg: Required<Omit<TotpConfig, "replayGuard">>;
+	readonly #replayGuard: TotpReplayGuard | null;
 
 	constructor(config: TotpConfig = {}) {
-		this.#cfg = { ...DEFAULTS, ...config };
+		const { replayGuard, ...rest } = config;
+		this.#cfg = { ...DEFAULTS, ...rest };
+		// Defaults ON: a code that works twice is the failure this exists to
+		// prevent, so opting out has to be deliberate.
+		this.#replayGuard =
+			replayGuard === null
+				? null
+				: (replayGuard ?? new MemoryTotpReplayGuard());
 		if (this.#cfg.digits < 6 || this.#cfg.digits > 8) {
 			throw new WardenError(
 				"INVALID_CONFIG",
@@ -91,7 +150,11 @@ export class TotpProvider {
 	 * Verify a user-supplied code against the secret, accepting codes from the
 	 * surrounding `window` time steps to tolerate clock skew. Constant-time.
 	 */
-	verify(secret: string, code: string, atMs: number = Date.now()): boolean {
+	async verify(
+		secret: string,
+		code: string,
+		atMs: number = Date.now(),
+	): Promise<boolean> {
 		const normalized = code.replace(/\s/g, "");
 		if (normalized.length !== this.#cfg.digits) {
 			return false;
@@ -99,11 +162,32 @@ export class TotpProvider {
 		const key = base32Decode(secret);
 		const current = Math.floor(atMs / 1000 / this.#cfg.period);
 		for (let offset = -this.#cfg.window; offset <= this.#cfg.window; offset++) {
-			if (constantTimeEqual(this.#hotp(key, current + offset), normalized)) {
-				return true;
-			}
+			const counter = current + offset;
+			if (!constantTimeEqual(this.#hotp(key, counter), normalized)) continue;
+			if (this.#replayGuard === null) return true;
+			// A matching code is only accepted ONCE. Without this it stays valid
+			// for the whole window — with the default settings, ~90 seconds in
+			// which a shoulder-surfed or intercepted code still works.
+			const seenKey = this.#replayKey(secret, counter);
+			if (await this.#replayGuard.used(seenKey)) return false;
+			// Remember it for as long as it could still be replayed: until the
+			// last step that would accept it has passed.
+			const ttlMs =
+				(counter + this.#cfg.window + 1) * this.#cfg.period * 1000 - atMs;
+			await this.#replayGuard.remember(seenKey, Math.max(ttlMs, 0));
+			return true;
 		}
 		return false;
+	}
+
+	/**
+	 * An opaque key for one (secret, step) pair. Hashed, so a shared store never
+	 * holds the seed, and bounded in length whatever the secret looks like.
+	 */
+	#replayKey(secret: string, counter: number): string {
+		return createHmac("sha256", secret)
+			.update(`totp:${counter}`)
+			.digest("base64url");
 	}
 
 	/** RFC 4226 HOTP: HMAC over the 8-byte counter, dynamically truncated. */

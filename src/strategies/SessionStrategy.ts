@@ -7,7 +7,12 @@
  * @implements MISS-7
  */
 
-import type { AuthResult, AuthStrategy, UserPayload } from "../AuthManager.js";
+import type {
+	AuthClientResponse,
+	AuthResult,
+	AuthStrategy,
+	UserPayload,
+} from "../AuthManager.js";
 import { WardenError } from "../errors.js";
 
 export interface SessionStore {
@@ -102,6 +107,17 @@ export class SessionStrategy implements AuthStrategy {
 	async login(user: UserPayload, session: SessionStore): Promise<void> {
 		session.regenerate();
 		session.put(this.#sessionKey, user.id);
+	}
+
+	/**
+	 * The session entry a test client needs to be `user` (AdonisJS
+	 * `authenticateAsClient`).
+	 *
+	 * Returns the same key `login()` writes, so the request is authenticated by
+	 * the guard's own logic rather than by the test knowing where the id lives.
+	 */
+	authenticateAsClient(user: UserPayload): AuthClientResponse {
+		return { session: { [this.#sessionKey]: user.id } };
 	}
 
 	/** Logout — remove user ID from session. */

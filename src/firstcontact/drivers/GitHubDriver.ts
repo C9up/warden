@@ -8,6 +8,7 @@ import type {
 	OAuthToken,
 	OAuthUser,
 } from "../types.js";
+import { assertOAuthState } from "../types.js";
 
 export class GitHubDriver implements FirstContactDriver {
 	constructor(private config: OAuthConfig) {}
@@ -27,9 +28,7 @@ export class GitHubDriver implements FirstContactDriver {
 		state?: string,
 		expectedState?: string,
 	): Promise<{ user: OAuthUser; token: OAuthToken }> {
-		if (expectedState && state !== expectedState) {
-			throw new Error("OAuth state mismatch — possible CSRF attack");
-		}
+		assertOAuthState(state, expectedState);
 		const tokenRes = await fetch(
 			"https://github.com/login/oauth/access_token",
 			{

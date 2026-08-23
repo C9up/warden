@@ -6,7 +6,12 @@
  * @implements MISS-8
  */
 
-import type { AuthResult, AuthStrategy, UserPayload } from "../AuthManager.js";
+import type {
+	AuthClientResponse,
+	AuthResult,
+	AuthStrategy,
+	UserPayload,
+} from "../AuthManager.js";
 
 export interface ApiKeyConfig {
 	headerName?: string;
@@ -40,6 +45,23 @@ export class ApiKeyStrategy implements AuthStrategy {
 		throw new Error(
 			"ApiKeyStrategy does not support credential-based auth. Use verify() with the API key.",
 		);
+	}
+
+	/**
+	 * The header a test client sends to present `key` (AdonisJS
+	 * `authenticateAsClient`).
+	 *
+	 * Takes the KEY, not a user: an API key is issued out of band, so a test
+	 * seeds one through `findByKey` and hands that same key here — inventing a
+	 * key the resolver has never seen would prove nothing.
+	 */
+	authenticateAsClient(key: string): AuthClientResponse {
+		return {
+			headers: {
+				authorization: `Bearer ${key}`,
+				[this.#headerName]: key,
+			},
+		};
 	}
 
 	async verify(token: string): Promise<AuthResult> {

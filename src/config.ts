@@ -22,6 +22,10 @@ import type { MfaManager } from "./mfa/MfaManager.js";
 import type { RightsStore, Scope } from "./rights/types.js";
 import type { ApiKeyConfig } from "./strategies/ApiKeyStrategy.js";
 import { ApiKeyStrategy } from "./strategies/ApiKeyStrategy.js";
+import {
+	type BasicAuthConfig,
+	BasicAuthStrategy,
+} from "./strategies/BasicAuthStrategy.js";
 import { JwtStrategy } from "./strategies/JwtStrategy.js";
 import type { SessionStrategyConfig } from "./strategies/SessionStrategy.js";
 import { SessionStrategy } from "./strategies/SessionStrategy.js";
@@ -74,6 +78,11 @@ export function sessionGuard(config: SessionStrategyConfig): GuardFactory {
 /** Build an API-key / access-tokens guard from its config. */
 export function apiKeyGuard(config: ApiKeyConfig): GuardFactory {
 	return new ApiKeyStrategy(config);
+}
+
+/** Build an HTTP Basic guard from its config (AdonisJS `basicAuthGuard()`). */
+export function basicAuthGuard(config: BasicAuthConfig): GuardFactory {
+	return new BasicAuthStrategy(config);
 }
 
 export interface WardenConfig {

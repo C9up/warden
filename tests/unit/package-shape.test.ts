@@ -64,7 +64,10 @@ function isManifest(value: unknown): value is Manifest {
 	if (!isRecord(value)) return false;
 	if (typeof value.description !== "string") return false;
 	if (!isExportMap(value.exports)) return false;
-	if (!isRecord(value.publishConfig) || !isExportMap(value.publishConfig.exports))
+	if (
+		!isRecord(value.publishConfig) ||
+		!isExportMap(value.publishConfig.exports)
+	)
 		return false;
 	for (const block of ["dependencies", "peerDependencies", "devDependencies"]) {
 		const present = value[block];

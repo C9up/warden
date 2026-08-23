@@ -153,5 +153,95 @@ export default class WardenProvider {
 	async boot() {
 		const manager = await this.app.container.resolve(AuthManager);
 		if (manager instanceof AuthManager) setAuth(manager);
+		await this.#registerTemplateTags();
 	}
+
+	/**
+	 * Publish `@can` / `@cannot` to the template engine, as AdonisJS's bouncer
+	 * does. A migrated template keeps `@can('PostPolicy.edit', post) … @endcan`
+	 * unchanged.
+	 *
+	 * Both are BLOCK tags and both AWAIT — the check returns a promise — so they
+	 * render on the async path and raise on a synchronous one, matching upstream
+	 * (which emits `await bouncer.can(...)`). The checks themselves come from
+	 * `ctx.bouncer.templateHelpers`, shared into the view per request.
+	 *
+	 * Resolved through the container: warden must not depend on the engine, and
+	 * an app with no template layer simply skips this.
+	 */
+	async #registerTemplateTags(): Promise<void> {
+		const engine = await this.#resolveTemplateEngine();
+		if (engine === undefined) return;
+		for (const tagName of ["can", "cannot"] as const) {
+			engine.registerTag({
+				tagName,
+				block: true,
+				seekable: true,
+				async compile(_parser, buffer, token) {
+					// The shared bag lives in the render scope under `bouncer`.
+					const bouncer = token.evaluate(
+						"typeof bouncer === 'undefined' ? undefined : bouncer",
+					);
+					const check = Reflect.get(Object(bouncer), tagName);
+					if (typeof check !== "function") {
+						// No bouncer on this request: deny rather than render an
+						// unguarded body.
+						return;
+					}
+					const args = token.evaluate(`[${token.properties.jsArg}]`);
+					const allowed = await check.apply(
+						bouncer,
+						Array.isArray(args) ? args : [],
+					);
+					if (allowed === true) buffer.writeRaw(await token.renderBody());
+				},
+			});
+		}
+	}
+
+	/** The template engine, if the host installed one. */
+	async #resolveTemplateEngine(): Promise<TemplateEngineLike | undefined> {
+		for (const token of ["inker", "view"]) {
+			try {
+				const binding: unknown = await this.app.container.resolve(token);
+				for (const candidate of [
+					binding,
+					Reflect.get(Object(binding), "_templates"),
+				]) {
+					if (
+						typeof candidate === "object" &&
+						candidate !== null &&
+						typeof Reflect.get(candidate, "registerTag") === "function"
+					) {
+						return {
+							registerTag: Reflect.get(candidate, "registerTag").bind(
+								candidate,
+							),
+						};
+					}
+				}
+			} catch {
+				// A host without a template layer is not an error.
+			}
+		}
+		return undefined;
+	}
+}
+
+/** The only surface warden needs of a template engine. */
+interface TemplateEngineLike {
+	registerTag(tag: {
+		tagName: string;
+		block: boolean;
+		seekable: boolean;
+		compile(
+			parser: unknown,
+			buffer: { writeRaw(text: string): void },
+			token: {
+				properties: { jsArg: string };
+				renderBody(): string | Promise<string>;
+				evaluate(expression: string): unknown;
+			},
+		): void | Promise<void>;
+	}): void;
 }

@@ -157,6 +157,53 @@ export class Bouncer {
 		return AuthorizationResponse.deny(message, status);
 	}
 
+	/**
+	 * The checks a TEMPLATE performs, shared into the view per request so
+	 * `@can('post.edit', post)` resolves them (AdonisJS shares the same pair
+	 * under `bouncer`; it names the bag `edgeHelpers`, we do not borrow the
+	 * engine's name).
+	 *
+	 * AdonisJS reads a dotted action as `policy.method` —
+	 * `'PostPolicy.edit'` is `with('PostPolicy').allows('edit', …)`. Warden,
+	 * however, keys its ABILITIES with dots (`'post.edit'`), so applying that
+	 * split blindly would break every warden app.
+	 *
+	 * NAMED DEVIATION, strictly more permissive: a registered ability wins, and
+	 * only an action with no matching ability falls through to the policy
+	 * split. A migrated AdonisJS template resolves its policies exactly as
+	 * before, and a warden app keeps its dotted abilities.
+	 */
+	readonly templateHelpers: {
+		bouncer: {
+			can(action: string, ...args: unknown[]): Promise<boolean>;
+			cannot(action: string, ...args: unknown[]): Promise<boolean>;
+		};
+	} = {
+		bouncer: {
+			can: (action: string, ...args: unknown[]): Promise<boolean> => {
+				const split = this.#splitAction(action);
+				return split === undefined
+					? this.allows(action, ...args)
+					: this.with(split.policy).allows(split.method, ...args);
+			},
+			cannot: (action: string, ...args: unknown[]): Promise<boolean> => {
+				const split = this.#splitAction(action);
+				return split === undefined
+					? this.denies(action, ...args)
+					: this.with(split.policy).denies(split.method, ...args);
+			},
+		},
+	};
+
+	/** `policy.method` for a dotted action that names no registered ability;
+	 * `undefined` when the action IS an ability (warden keys its own with dots). */
+	#splitAction(action: string): { policy: string; method: string } | undefined {
+		if (Object.hasOwn(this.#abilities, action)) return undefined;
+		const dot = action.indexOf(".");
+		if (dot <= 0 || dot === action.length - 1) return undefined;
+		return { policy: action.slice(0, dot), method: action.slice(dot + 1) };
+	}
+
 	/** Open a policy for checks (D8 — fresh policy instance per check). */
 	with(policy: (new () => BasePolicy) | string): PolicyAuthorizer {
 		const factory =

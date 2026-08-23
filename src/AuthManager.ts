@@ -31,10 +31,34 @@ export interface AuthResult {
 	strategyCrash?: true;
 }
 
+/**
+ * What a test client must send to act as a user (AdonisJS `AuthClientResponse`).
+ *
+ * Each guard answers in its own currency — a header for a token guard, a
+ * session entry for a session guard — so the test harness applies whichever
+ * fields come back instead of knowing how each guard authenticates.
+ */
+export interface AuthClientResponse {
+	/** Headers to set on the request. */
+	headers?: Record<string, string>;
+	/** Session values to seed before the request. */
+	session?: Record<string, unknown>;
+	/** Cookies to send. */
+	cookies?: Record<string, string>;
+}
+
 export interface AuthStrategy {
 	name: string;
 	authenticate(credentials: Record<string, unknown>): Promise<AuthResult>;
 	verify(token: string, context?: Record<string, unknown>): Promise<AuthResult>;
+	/**
+	 * Build what a test client sends to be this user (AdonisJS
+	 * `authenticateAsClient`). Optional: a guard with no test seam simply has
+	 * none, and the harness says so instead of forging one.
+	 */
+	authenticateAsClient?(
+		...args: never[]
+	): Promise<AuthClientResponse> | AuthClientResponse;
 }
 
 /**

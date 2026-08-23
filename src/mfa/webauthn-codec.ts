@@ -49,10 +49,30 @@ interface Decoded {
 }
 
 /**
+ * How deep a nested item may go.
+ *
+ * Every item here is attacker-supplied: a registration payload is whatever the
+ * browser posted. Without a limit, a run of tag bytes recurses once per byte
+ * and overflows the stack — 200 KB was enough to kill the request.
+ */
+const MAX_DEPTH = 32;
+
+/**
  * Decode a single CBOR item starting at `start`. Definite-length only —
  * indefinite-length items and floats are rejected (WebAuthn uses neither).
+ *
+ * Every declared length is checked against the bytes actually left. A CBOR
+ * header can claim up to 2^64 items in five bytes; believing it meant looping
+ * billions of times over a buffer that ended long ago, which cost seconds of
+ * blocked event loop per request.
  */
-export function decodeCbor(buf: Buffer, start = 0): Decoded {
+export function decodeCbor(buf: Buffer, start = 0, depth = 0): Decoded {
+	if (depth > MAX_DEPTH) {
+		throw new Error(`CBOR: nesting deeper than ${MAX_DEPTH} is not supported`);
+	}
+	if (start < 0 || start >= buf.length) {
+		throw new Error("CBOR: item starts past the end of the buffer");
+	}
 	const major = buf[start] >> 5;
 	const info = buf[start] & 0x1f;
 	let len: number;
@@ -60,20 +80,35 @@ export function decodeCbor(buf: Buffer, start = 0): Decoded {
 	if (info < 24) {
 		len = info;
 	} else if (info === 24) {
+		if (p >= buf.length) throw new Error("CBOR: truncated length");
 		len = buf[p];
 		p += 1;
 	} else if (info === 25) {
+		if (p + 2 > buf.length) throw new Error("CBOR: truncated length");
 		len = buf.readUInt16BE(p);
 		p += 2;
 	} else if (info === 26) {
+		if (p + 4 > buf.length) throw new Error("CBOR: truncated length");
 		len = buf.readUInt32BE(p);
 		p += 4;
 	} else if (info === 27) {
-		len = Number(buf.readBigUInt64BE(p));
+		if (p + 8 > buf.length) throw new Error("CBOR: truncated length");
+		const wide = buf.readBigUInt64BE(p);
+		if (wide > BigInt(Number.MAX_SAFE_INTEGER)) {
+			throw new Error("CBOR: length exceeds the safe integer range");
+		}
+		len = Number(wide);
 		p += 8;
 	} else {
 		throw new Error("CBOR: indefinite or reserved length is not supported");
 	}
+
+	/** Reject a declared count the remaining bytes cannot possibly hold. */
+	const fits = (perItem: number): void => {
+		if (len > (buf.length - p) / perItem) {
+			throw new Error("CBOR: declared length exceeds the remaining bytes");
+		}
+	};
 
 	switch (major) {
 		case 0: // unsigned int
@@ -81,15 +116,20 @@ export function decodeCbor(buf: Buffer, start = 0): Decoded {
 		case 1: // negative int
 			return { value: -1 - len, next: p };
 		case 2: // byte string
+			fits(1);
 			return { value: buf.subarray(p, p + len), next: p + len };
 		case 3: // text string
+			fits(1);
 			return { value: buf.toString("utf8", p, p + len), next: p + len };
 		case 4: {
 			// array
+			// One item is one byte at minimum, so a count above the bytes left
+			// cannot be honest.
+			fits(1);
 			const arr: CborValue[] = [];
 			let cur = p;
 			for (let i = 0; i < len; i++) {
-				const d = decodeCbor(buf, cur);
+				const d = decodeCbor(buf, cur, depth + 1);
 				arr.push(d.value);
 				cur = d.next;
 			}
@@ -97,12 +137,14 @@ export function decodeCbor(buf: Buffer, start = 0): Decoded {
 		}
 		case 5: {
 			// map
+			// A pair is two bytes at minimum.
+			fits(2);
 			const map: CborMap = new Map();
 			let cur = p;
 			for (let i = 0; i < len; i++) {
-				const k = decodeCbor(buf, cur);
+				const k = decodeCbor(buf, cur, depth + 1);
 				cur = k.next;
-				const v = decodeCbor(buf, cur);
+				const v = decodeCbor(buf, cur, depth + 1);
 				cur = v.next;
 				if (typeof k.value !== "number" && typeof k.value !== "string") {
 					throw new Error("CBOR: only integer/text map keys are supported");
@@ -113,7 +155,7 @@ export function decodeCbor(buf: Buffer, start = 0): Decoded {
 		}
 		case 6: {
 			// tag — decode and surface the tagged content
-			const d = decodeCbor(buf, p);
+			const d = decodeCbor(buf, p, depth + 1);
 			return { value: d.value, next: d.next };
 		}
 		case 7:

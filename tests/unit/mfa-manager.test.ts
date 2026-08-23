@@ -2,7 +2,7 @@
  * MfaManager — TOTP enrollment lifecycle (pending → confirmed), backup-code
  * generation/consumption/regeneration, the unified verify(), and status helpers.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BackupCodesProvider } from "../../src/mfa/BackupCodesProvider.js";
 import { MfaManager } from "../../src/mfa/MfaManager.js";
 import { TotpProvider } from "../../src/mfa/TotpProvider.js";
@@ -17,6 +17,21 @@ function manager(): MfaManager {
 
 const USER = { id: "user-1", name: "k@c9up.com" };
 
+/**
+ * Move past the accept window so the next code is a different one.
+ *
+ * A TOTP code is single-use (RFC 6238 §5.2), so a test that confirms with a
+ * code and then logs in with the SAME one is testing a replay, not a login.
+ * Real users type whatever the app shows them a moment later.
+ */
+function nextTimeStep(): void {
+	vi.setSystemTime(Date.now() + 60_000);
+}
+
+afterEach(() => {
+	vi.useRealTimers();
+});
+
 describe("warden > MfaManager — TOTP", () => {
 	it("enrolls pending, then confirms with a valid code", async () => {
 		const m = manager();
@@ -27,9 +42,21 @@ describe("warden > MfaManager — TOTP", () => {
 		expect(await m.isEnabled(USER.id)).toBe(false);
 		expect(await m.verifyTotp(USER.id, totp.generate(secret))).toBe(false);
 
+		vi.useFakeTimers({ shouldAdvanceTime: true });
 		expect(await m.confirmTotp(factorId, totp.generate(secret))).toBe(true);
 		expect(await m.isEnabled(USER.id)).toBe(true);
+		nextTimeStep();
 		expect(await m.verifyTotp(USER.id, totp.generate(secret))).toBe(true);
+	});
+
+	it("refuses a code that has already been accepted", async () => {
+		const m = manager();
+		const totp = new TotpProvider();
+		const { factorId, secret } = await m.enrollTotp(USER, "iPhone");
+		const code = totp.generate(secret);
+		expect(await m.confirmTotp(factorId, code)).toBe(true);
+		// Same code, still inside its window — a replay, and refused.
+		expect(await m.verifyTotp(USER.id, code)).toBe(false);
 	});
 
 	it("does not confirm with a wrong code", async () => {
@@ -65,9 +92,11 @@ describe("warden > MfaManager — unified verify & status", () => {
 		const m = manager();
 		const totp = new TotpProvider();
 		const { factorId, secret } = await m.enrollTotp(USER);
+		vi.useFakeTimers({ shouldAdvanceTime: true });
 		await m.confirmTotp(factorId, totp.generate(secret));
 		const codes = await m.createBackupCodes(USER.id);
 
+		nextTimeStep();
 		expect(await m.verify(USER.id, totp.generate(secret))).toBe(true);
 		expect(await m.verify(USER.id, codes[2])).toBe(true);
 		expect(await m.verify(USER.id, "999999")).toBe(false);
@@ -107,7 +136,10 @@ describe("warden > MfaManager — rate limit", () => {
 		});
 		const totp = new TotpProvider();
 		const { factorId, secret } = await m.enrollTotp(USER);
+		vi.useFakeTimers({ shouldAdvanceTime: true });
 		await m.confirmTotp(factorId, totp.generate(secret));
+		// The confirmation code is spent; the tests below log in with a later one.
+		nextTimeStep();
 		return { m, totp, secret };
 	}
 

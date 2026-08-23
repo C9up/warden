@@ -41,6 +41,7 @@ export type {
 export type { GuardFactory, WardenConfig } from "./config.js";
 export {
 	apiKeyGuard,
+	basicAuthGuard,
 	defineConfig,
 	jwtGuard,
 	sessionGuard,
@@ -98,8 +99,9 @@ export type {
 	TotpAlgorithm,
 	TotpConfig,
 	TotpEnrollment,
+	TotpReplayGuard,
 } from "./mfa/TotpProvider.js";
-export { TotpProvider } from "./mfa/TotpProvider.js";
+export { MemoryTotpReplayGuard, TotpProvider } from "./mfa/TotpProvider.js";
 export type {
 	AuthenticationOptionsJSON,
 	AuthenticationResponseJSON,
@@ -145,6 +147,13 @@ export type {
 export { scopeKey } from "./rights/types.js";
 export type { ApiKeyConfig } from "./strategies/ApiKeyStrategy.js";
 export { ApiKeyStrategy } from "./strategies/ApiKeyStrategy.js";
+export type { BasicAuthConfig } from "./strategies/BasicAuthStrategy.js";
+export {
+	BasicAuthStrategy,
+	basicAuthChallenge,
+	decodeBasicAuth,
+	safeCompare,
+} from "./strategies/BasicAuthStrategy.js";
 export type { JwtClaims, JwtStrategyConfig } from "./strategies/JwtStrategy.js";
 export { generateJwtSecret, JwtStrategy } from "./strategies/JwtStrategy.js";
 export type {

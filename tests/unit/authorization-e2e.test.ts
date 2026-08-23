@@ -163,8 +163,8 @@ describe("warden > authorization e2e (AC2 — all facets in one flow)", () => {
 		const store = seedStore();
 		// eve carries post.edit as a JWT claim but has no role/grant in the store.
 		const eve: UserPayload = { id: "eve", permissions: ["post.edit"] };
-		expect(
-			await bouncerFor(eve, store).with(PostPolicy).allows("edit"),
-		).toBe(false);
+		expect(await bouncerFor(eve, store).with(PostPolicy).allows("edit")).toBe(
+			false,
+		);
 	});
 });

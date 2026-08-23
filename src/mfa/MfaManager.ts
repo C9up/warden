@@ -136,7 +136,7 @@ export class MfaManager {
 		if (!factor || factor.kind !== "totp" || !factor.secret) {
 			return false;
 		}
-		if (!totp.verify(factor.secret, code)) {
+		if (!(await totp.verify(factor.secret, code))) {
 			return false;
 		}
 		await this.#store.save({ ...factor, confirmedAt: Date.now() });
@@ -147,13 +147,20 @@ export class MfaManager {
 	async verifyTotp(userId: string, code: string): Promise<boolean> {
 		const totp = this.#requireTotp();
 		const factors = await this.#store.findByUser(userId);
-		return factors.some(
-			(f) =>
-				f.kind === "totp" &&
-				f.confirmedAt !== undefined &&
-				f.secret !== undefined &&
-				totp.verify(f.secret, code),
-		);
+		// Sequential, not Promise.all: the replay guard must see one accepted
+		// code at a time, and stopping at the first match avoids burning the
+		// code against a second factor that would then reject it as replayed.
+		for (const factor of factors) {
+			if (
+				factor.kind !== "totp" ||
+				factor.confirmedAt === undefined ||
+				factor.secret === undefined
+			) {
+				continue;
+			}
+			if (await totp.verify(factor.secret, code)) return true;
+		}
+		return false;
 	}
 
 	// ── Backup codes ─────────────────────────────────────────────────

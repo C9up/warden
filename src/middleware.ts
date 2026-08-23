@@ -318,6 +318,19 @@ export async function silentAuth(ctx: WardenContext, next: WardenNext) {
 }
 
 /**
+ * Merge values into the request's view state, when the app has a template
+ * layer. A no-op outside an HTTP render, or in an app with no views.
+ */
+function shareWithView(
+	ctx: WardenContext,
+	values: Record<string, unknown>,
+): void {
+	const view = Reflect.get(Object(ctx), "view");
+	const share = Reflect.get(Object(view), "share");
+	if (typeof share === "function") share.call(view, values);
+}
+
+/**
  * Reuse the request's Authenticator if one is already attached (e.g. `silentAuth`
  * ran first), else build and attach a fresh one. Keeps `ctx.auth` a single
  * per-request instance across the middleware chain.
@@ -329,6 +342,10 @@ function ensureAuthenticator(
 	if (ctx.auth instanceof Authenticator) return ctx.auth;
 	const authenticator = new Authenticator(ctx, auth);
 	ctx.auth = authenticator;
+	// Share it with the request's view, as AdonisJS's auth does, so a migrated
+	// template reads `{{ auth.user.email }}` / `@if(auth.isAuthenticated)`
+	// unchanged. Both middlewares funnel through here, so one share covers them.
+	shareWithView(ctx, { auth: authenticator });
 	return authenticator;
 }
 
@@ -405,10 +422,14 @@ export async function initializeBouncer(ctx: WardenContext, next: WardenNext) {
 		? await registry.resolveScope(toScopeContext(ctx))
 		: "global";
 
-	ctx.bouncer = new Bouncer(user, registry?.abilities, registry?.policies, {
+	const bouncer = new Bouncer(user, registry?.abilities, registry?.policies, {
 		scope,
 		resolver,
 	});
+	ctx.bouncer = bouncer;
+	// Share the checks with the request's view so `@can(...)` resolves them,
+	// as AdonisJS's own middleware does.
+	shareWithView(ctx, bouncer.templateHelpers);
 	await next();
 }
 

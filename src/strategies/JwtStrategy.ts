@@ -4,7 +4,12 @@
  */
 
 import { randomBytes, randomUUID } from "node:crypto";
-import type { AuthResult, AuthStrategy, UserPayload } from "../AuthManager.js";
+import type {
+	AuthClientResponse,
+	AuthResult,
+	AuthStrategy,
+	UserPayload,
+} from "../AuthManager.js";
 import { nativeWarden } from "../native.js";
 import type { TokenBlacklist } from "../TokenBlacklist.js";
 
@@ -214,6 +219,18 @@ export class JwtStrategy implements AuthStrategy {
 	 * Returns `true` when the token was added to the blacklist, `false` when
 	 * the token is already expired (revocation is unnecessary) or unparseable.
 	 */
+	/**
+	 * The header a test client sends to be `user` (AdonisJS
+	 * `authenticateAsClient`).
+	 *
+	 * Signs a real token with the configured secret, so the request travels the
+	 * SAME verification path as production — a test that forges its own header
+	 * proves only that the forgery works.
+	 */
+	authenticateAsClient(user: UserPayload): AuthClientResponse {
+		return { headers: { authorization: `Bearer ${this.signToken(user)}` } };
+	}
+
 	async revoke(token: string): Promise<boolean> {
 		if (!this.#blacklist) {
 			throw new Error(
