@@ -14,6 +14,12 @@ import type {
 	UserPayload,
 } from "../AuthManager.js";
 import { WardenError } from "../errors.js";
+import {
+	decodeTokenValue,
+	mintRememberMeToken,
+	type RememberMeTokenDriver,
+	verifyAndRecycleRememberMeToken,
+} from "../RememberMeToken.js";
 
 export interface SessionStore {
 	get(key: string): unknown;
@@ -38,7 +44,26 @@ export interface SessionStore {
 export interface SessionStrategyConfig {
 	sessionKey?: string;
 	findUser: (id: string | number) => Promise<UserPayload | null>;
+	/**
+	 * Turn on "keep me signed in". Adonis calls the equivalent flag
+	 * `useRememberMeTokens`; without a driver there is nowhere to persist the
+	 * token, so passing one IS the opt-in.
+	 */
+	rememberMeTokens?: RememberMeTokenDriver;
+	/**
+	 * How long a remember-me token lives. Adonis defaults to two years, and a
+	 * number here is SECONDS (`durationToSeconds` semantics).
+	 */
+	rememberMeAge?: number;
+	/**
+	 * Cookie name holding the token. Adonis derives `remember_<guard>`; the
+	 * default matches the `web` guard an app is most likely migrating.
+	 */
+	rememberMeCookieName?: string;
 }
+
+/** Two years, Adonis' `rememberMeTokensAge` default. */
+const DEFAULT_REMEMBER_AGE_SECONDS = 63_072_000;
 
 export class SessionStrategy implements AuthStrategy {
 	name = "session";
@@ -48,6 +73,71 @@ export class SessionStrategy implements AuthStrategy {
 	constructor(config: SessionStrategyConfig) {
 		this.#config = config;
 		this.#sessionKey = config.sessionKey ?? "auth_user_id";
+	}
+
+	/** The cookie the remember-me token travels in. */
+	get rememberMeCookieName(): string {
+		return this.#config.rememberMeCookieName ?? "remember_web";
+	}
+
+	/** Whether "keep me signed in" is wired at all. */
+	get usesRememberMeTokens(): boolean {
+		return this.#config.rememberMeTokens !== undefined;
+	}
+
+	#rememberMeAge(): number {
+		return this.#config.rememberMeAge ?? DEFAULT_REMEMBER_AGE_SECONDS;
+	}
+
+	/**
+	 * Mint a remember-me token for `user` and return the cookie value the caller
+	 * must set. `null` when the feature is not wired.
+	 */
+	async issueRememberMeToken(user: UserPayload): Promise<string | null> {
+		const driver = this.#config.rememberMeTokens;
+		if (!driver) return null;
+		const minted = mintRememberMeToken(user.id, this.#rememberMeAge());
+		await driver.create(minted.stored);
+		return minted.value;
+	}
+
+	/**
+	 * Authenticate from a remember-me cookie, and RECYCLE it: the returned
+	 * `cookieValue` must replace the one the browser holds.
+	 *
+	 * The user is re-read through `findUser`, never trusted from the token — a
+	 * token outlives the row it points at, and a deleted or disabled account
+	 * must not walk back in through a cookie.
+	 */
+	async authenticateViaRememberMeToken(
+		cookieValue: unknown,
+	): Promise<{ user: UserPayload; cookieValue: string } | null> {
+		const driver = this.#config.rememberMeTokens;
+		if (!driver) return null;
+
+		const recycled = await verifyAndRecycleRememberMeToken(
+			driver,
+			cookieValue,
+			this.#rememberMeAge(),
+		);
+		if (!recycled) return null;
+
+		const user = await this.#config.findUser(recycled.userId);
+		if (!user) return null;
+
+		return { user, cookieValue: recycled.value };
+	}
+
+	/**
+	 * Drop the token behind `cookieValue`. Called on logout so the persistent
+	 * credential dies with the session — Adonis deletes the row too.
+	 */
+	async revokeRememberMeToken(cookieValue: unknown): Promise<void> {
+		const driver = this.#config.rememberMeTokens;
+		if (!driver) return;
+		const decoded = decodeTokenValue(cookieValue);
+		if (!decoded) return;
+		await driver.delete(decoded.identifier);
 	}
 
 	/** Authenticate via email/password — stores user ID in session. */
@@ -120,7 +210,12 @@ export class SessionStrategy implements AuthStrategy {
 		return { session: { [this.#sessionKey]: user.id } };
 	}
 
-	/** Logout — remove user ID from session. */
+	/**
+	 * Logout — remove the user id from the session.
+	 *
+	 * The remember-me token is revoked separately through
+	 * {@link revokeRememberMeToken}, because only the caller holds the cookie.
+	 */
 	async logout(session: SessionStore): Promise<void> {
 		session.forget(this.#sessionKey);
 	}

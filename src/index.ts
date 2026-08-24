@@ -132,6 +132,19 @@ export {
 	generateRefreshToken,
 	MemoryRefreshTokenDriver,
 } from "./RefreshTokenStore.js";
+export {
+	DEFAULT_SECRET_LENGTH,
+	decodeTokenValue,
+	encodeTokenValue,
+	hashSecret,
+	MemoryRememberMeTokenDriver,
+	type MintedRememberMeToken,
+	mintRememberMeToken,
+	type RememberMeTokenDriver,
+	type StoredRememberMeToken,
+	safeCompareHashes,
+	verifyAndRecycleRememberMeToken,
+} from "./RememberMeToken.js";
 export type {
 	BlacklistDegradeEvent,
 	ResilientBlacklistConfig,
