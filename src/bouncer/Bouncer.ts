@@ -38,7 +38,7 @@ export class Bouncer {
 	readonly #policies: Record<string, new () => BasePolicy>;
 	readonly #scope: Scope;
 	readonly #resolver: RightsResolver | undefined;
-	readonly #containerResolver: PolicyContainerResolver | undefined;
+	#containerResolver: PolicyContainerResolver | undefined;
 	readonly #emitter: BouncerEmitter | undefined;
 	/** Memoized resolution — a Bouncer is fixed per `(user, scope)`, so resolve once (D3). */
 	#resolved: Promise<EffectivePermissions> | undefined;
@@ -56,6 +56,19 @@ export class Bouncer {
 		this.#resolver = context?.resolver;
 		this.#containerResolver = context?.containerResolver;
 		this.#emitter = context?.emitter;
+	}
+
+	/**
+	 * Point the bouncer at an IoC resolver, so a policy's constructor
+	 * dependencies are injected (AdonisJS `setContainerResolver`).
+	 *
+	 * The constructor takes one too; this is the setter AdonisJS exposes so the
+	 * HTTP layer can hand over the REQUEST's resolver after the bouncer exists.
+	 * Passing `undefined` clears it, and policies fall back to `new Policy()`.
+	 */
+	setContainerResolver(containerResolver?: PolicyContainerResolver): this {
+		this.#containerResolver = containerResolver;
+		return this;
 	}
 
 	/**

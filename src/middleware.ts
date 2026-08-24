@@ -20,7 +20,7 @@ import { Authenticator } from "./Authenticator.js";
 import { AuthManager, type UserPayload } from "./AuthManager.js";
 import type { BasePolicy } from "./bouncer/BasePolicy.js";
 import { Bouncer } from "./bouncer/Bouncer.js";
-import type { Ability } from "./bouncer/types.js";
+import type { Ability, PolicyContainerResolver } from "./bouncer/types.js";
 import type { ScopeRequestContext } from "./config.js";
 import { E_UNAUTHORIZED_ACCESS, WardenError } from "./errors.js";
 import {
@@ -54,6 +54,33 @@ type ResolvableToken =
  */
 interface ContainerResolver {
 	make(token: ResolvableToken): Promise<unknown>;
+}
+
+/**
+ * Adapt the request resolver to the shape the Bouncer needs for policy DI.
+ *
+ * The context resolver is deliberately untyped (`Promise<unknown>`) — it
+ * resolves string tokens too. `instanceof` is what proves the instance is the
+ * policy that was asked for: a real check rather than an assertion, and it
+ * catches a host resolver that hands back something else instead of letting a
+ * wrong object reach the policy's methods.
+ */
+function policyResolver(
+	resolver: ContainerResolver | undefined,
+): PolicyContainerResolver | undefined {
+	if (resolver === undefined) return undefined;
+	return {
+		async make<T>(ctor: new (...args: never[]) => T): Promise<T> {
+			const instance = await resolver.make(ctor);
+			if (!(instance instanceof ctor)) {
+				throw new WardenError(
+					"POLICY_RESOLUTION_FAILED",
+					`The container resolved "${ctor.name}" to something else — a policy must be an instance of the class that was requested.`,
+				);
+			}
+			return instance;
+		},
+	};
 }
 
 /**
@@ -425,6 +452,11 @@ export async function initializeBouncer(ctx: WardenContext, next: WardenNext) {
 	const bouncer = new Bouncer(user, registry?.abilities, registry?.policies, {
 		scope,
 		resolver,
+		// The REQUEST's resolver, so a policy taking constructor dependencies
+		// gets them — and gets this request's, not the application container's.
+		// It was never passed, so `@inject()` on a policy silently resolved to a
+		// plain `new Policy()` with no dependencies at all.
+		containerResolver: policyResolver(ctx.containerResolver),
 	});
 	ctx.bouncer = bouncer;
 	// Share the checks with the request's view so `@can(...)` resolves them,
