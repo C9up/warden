@@ -17,7 +17,7 @@ export type {
 	AuthStrategy,
 	UserPayload,
 } from "./AuthManager.js";
-export { AuthManager } from "./AuthManager.js";
+export { AuthManager, type WardenEmitter } from "./AuthManager.js";
 export type { AuthRateLimiterConfig } from "./AuthRateLimiter.js";
 export { AuthRateLimiter } from "./AuthRateLimiter.js";
 export { AbilitiesBuilder } from "./bouncer/AbilitiesBuilder.js";

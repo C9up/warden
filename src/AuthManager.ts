@@ -110,12 +110,54 @@ function isTokenIssuer(
 /**
  * Manages authentication strategies and provides guard/permission checks.
  */
+/**
+ * The slice of an event emitter warden publishes through — `emit(name, data)`,
+ * which is what both `@c9up/ream`'s Emitter and Adonis' expose.
+ */
+export interface WardenEmitter {
+	emit(event: string, data: unknown): unknown;
+}
+
 export class AuthManager {
 	// AdonisJS names: `guards` (name → strategy) and `default` (the guard used
 	// when none is named). Renamed from the previous `strategies`/`defaultStrategy`.
 	private guards: Map<string, AuthStrategy> = new Map();
 	private default: string;
 	private readonly rights: RightsResolver;
+
+	/**
+	 * Where auth events go. Structural and optional: warden is a leaf and must
+	 * not import an emitter — a host wires its own through `setEmitter`, and one
+	 * that wires none simply gets no events.
+	 */
+	#emitter: WardenEmitter | undefined;
+
+	/**
+	 * Publish auth events on `emitter`. AdonisJS emits six of them from its
+	 * session guard, and an app that audits logins reads exactly those.
+	 */
+	setEmitter(emitter: WardenEmitter): this {
+		this.#emitter = emitter;
+		return this;
+	}
+
+	/**
+	 * Publish one auth event. Public so the per-request `Authenticator` can
+	 * report what it observed — it holds the guard chain, the manager holds the
+	 * emitter.
+	 */
+	emitAuthEvent(event: string, payload: Record<string, unknown>): void {
+		this.#emit(event, payload);
+	}
+
+	/** Fire-and-forget: an event listener must never break authentication. */
+	#emit(event: string, payload: Record<string, unknown>): void {
+		try {
+			void this.#emitter?.emit(event, payload);
+		} catch {
+			// A throwing listener is the listener's problem, not the login's.
+		}
+	}
 
 	constructor(config: AuthConfig) {
 		// Normalise the two accepted forms — AdonisJS `{ default, guards }` and
@@ -340,7 +382,16 @@ export class AuthManager {
 				},
 			);
 		}
+		this.#emit("session_auth:login_attempted", {
+			guardName: strategyName ?? this.default,
+			user,
+		});
 		await strategy.login(user, session);
+		this.#emit("session_auth:login_succeeded", {
+			guardName: strategyName ?? this.default,
+			user,
+			sessionId: undefined,
+		});
 	}
 
 	/**
@@ -357,6 +408,11 @@ export class AuthManager {
 			);
 		}
 		await strategy.logout(session);
+		this.#emit("session_auth:logged_out", {
+			guardName: strategyName ?? this.default,
+			user: null,
+			error: null,
+		});
 	}
 }
 
