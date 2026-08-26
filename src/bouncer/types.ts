@@ -23,8 +23,10 @@ export interface PolicyContainerResolver {
 
 /**
  * Agnostic event sink (Adonis `Bouncer.emitter`). When present, an
- * `authorization:finished` event fires after every ability/policy evaluation with
- * `{ user, action, response }`. No-op when absent.
+ * `authorization:finished` event fires after every ability/policy evaluation
+ * with `{ user, action, parameters, response }` (AdonisJS `BouncerEvents`).
+ * `parameters` are the arguments the check ran against — an audit log needs
+ * them to say WHICH resource was refused. No-op when absent.
  */
 export interface BouncerEmitter {
 	emit(event: string, payload: unknown): void;

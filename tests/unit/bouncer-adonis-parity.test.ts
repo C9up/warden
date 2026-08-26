@@ -189,7 +189,7 @@ describe("warden > bouncer > adonis parity fixes", () => {
 	});
 
 	// #12e — optional authorization:finished event
-	it("emits authorization:finished after an ability evaluation with { user, action, response }", async () => {
+	it("emits authorization:finished after an ability evaluation with { user, action, parameters, response }", async () => {
 		const emit = vi.fn();
 		const emitter: BouncerEmitter = { emit };
 		const currentUser = user();
@@ -201,8 +201,28 @@ describe("warden > bouncer > adonis parity fixes", () => {
 		expect(emit).toHaveBeenCalledWith("authorization:finished", {
 			user: currentUser,
 			action: "(ability)",
+			parameters: [],
 			response,
 		});
+	});
+
+	it("carries what the check was about", async () => {
+		const emit = vi.fn();
+		const currentUser = user();
+		const post = { id: 7 };
+		const bouncer = new Bouncer(currentUser, {}, {}, { emitter: { emit } });
+
+		await bouncer.execute(
+			Bouncer.ability((_u: UserPayload, _p: { id: number }) => false),
+			post,
+		);
+
+		// Without the arguments an audit log can say "Ada was denied editPost"
+		// but never which post — which is most of what an audit is for.
+		expect(emit).toHaveBeenCalledWith(
+			"authorization:finished",
+			expect.objectContaining({ parameters: [post] }),
+		);
 	});
 
 	it("emits authorization:finished after a policy evaluation", async () => {
@@ -220,7 +240,11 @@ describe("warden > bouncer > adonis parity fixes", () => {
 		expect(emit).toHaveBeenCalledTimes(1);
 		expect(emit).toHaveBeenCalledWith(
 			"authorization:finished",
-			expect.objectContaining({ user: currentUser, action: "update" }),
+			expect.objectContaining({
+				user: currentUser,
+				action: "update",
+				parameters: [],
+			}),
 		);
 	});
 

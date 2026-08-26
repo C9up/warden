@@ -110,6 +110,9 @@ export class PolicyAuthorizer {
 		this.#emitter?.emit("authorization:finished", {
 			user: this.#user,
 			action,
+			// Same payload as an ability check: which resource the decision was
+			// about, not just that a decision happened.
+			parameters: args,
 			response,
 		});
 		return response;

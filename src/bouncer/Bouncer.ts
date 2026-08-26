@@ -245,10 +245,17 @@ export class Bouncer {
 	}
 
 	/** Emit `authorization:finished` when an emitter is wired (no-op otherwise). */
-	#emit(action: string, response: AuthorizationResponse): void {
+	#emit(
+		action: string,
+		response: AuthorizationResponse,
+		parameters: unknown[],
+	): void {
 		this.#emitter?.emit("authorization:finished", {
 			user: this.#getUser(),
 			action,
+			// What the check was ABOUT. AdonisJS carries it, and without it an
+			// audit log can say "Ada was denied editPost" but never which post.
+			parameters,
 			response,
 		});
 	}
@@ -322,7 +329,7 @@ export class Bouncer {
 			run: (user) => resolved.execute(user, ...args),
 			args,
 		});
-		this.#emit(action, response);
+		this.#emit(action, response, args);
 		return response;
 	}
 
