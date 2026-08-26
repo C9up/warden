@@ -322,11 +322,13 @@ export class Authenticator {
 		const names =
 			guards && guards.length > 0 ? guards : [this.#auth.defaultStrategyName];
 		const guardName = names[0] ?? this.#auth.defaultStrategyName;
-		// The four authentication events AdonisJS' session guard emits. An app
-		// auditing logins subscribes to exactly these names.
-		this.#auth.emitAuthEvent("session_auth:authentication_attempted", {
-			guardName,
-		});
+		// Namespaced by the guard's driver, as AdonisJS does: `session_auth:*`,
+		// `access_tokens_auth:*`, `basic_auth:*`. An app auditing session logins
+		// must not be told about bearer-token traffic under the same name.
+		this.#auth.emitAuthEvent(
+			`${this.#auth.eventPrefixFor(guardName)}:authentication_attempted`,
+			{ guardName },
+		);
 		const creds = extractCredentials(this.#ctx, this.#auth);
 		const hasSessionStrategy = names.includes("session");
 		const { result, viaGuard, attemptCount, crashCount } =
@@ -338,11 +340,13 @@ export class Authenticator {
 		if (result?.authenticated && result.user) {
 			this.#user = result.user;
 			this.#viaGuard = viaGuard;
-			this.#auth.emitAuthEvent("session_auth:authentication_succeeded", {
-				guardName: viaGuard ?? guardName,
-				user: result.user,
-				sessionId: undefined,
-			});
+			// The guard that actually answered names the event, not the one asked
+			// for first.
+			const winner = viaGuard ?? guardName;
+			this.#auth.emitAuthEvent(
+				`${this.#auth.eventPrefixFor(winner)}:authentication_succeeded`,
+				{ guardName: winner, user: result.user, sessionId: undefined },
+			);
 			return;
 		}
 		// Every attempted guard crashed → a server-side incident, not a
@@ -361,10 +365,10 @@ export class Authenticator {
 				redirectTo: hasSessionStrategy ? options?.loginRoute : undefined,
 			},
 		);
-		this.#auth.emitAuthEvent("session_auth:authentication_failed", {
-			guardName,
-			error: failure,
-		});
+		this.#auth.emitAuthEvent(
+			`${this.#auth.eventPrefixFor(guardName)}:authentication_failed`,
+			{ guardName, error: failure },
+		);
 		throw failure;
 	}
 

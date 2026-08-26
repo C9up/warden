@@ -47,6 +47,25 @@ export interface AuthClientResponse {
 	cookies?: Record<string, string>;
 }
 
+/**
+ * The event namespace for a guard, taken from its DRIVER.
+ *
+ * AdonisJS namespaces auth events per driver — `session_auth:*`,
+ * `access_tokens_auth:*`, `basic_auth:*` — so an app can audit session logins
+ * without also hearing about every bearer token. Warden emitted `session_auth:*`
+ * whatever authenticated, which told a session listener about JWT traffic and
+ * left no name to subscribe to for the others.
+ *
+ * Driven by the strategy's `name` rather than the guard's config key: a guard
+ * called `web` running a `SessionStrategy` is still the session driver, exactly
+ * as upstream. A driver already ending in `_auth` (`basic_auth`) keeps its name
+ * rather than growing a second suffix, which is how AdonisJS spells it.
+ */
+export function authEventPrefix(driverName: string | undefined): string {
+	if (!driverName) return "session_auth";
+	return driverName.endsWith("_auth") ? driverName : `${driverName}_auth`;
+}
+
 export interface AuthStrategy {
 	name: string;
 	authenticate(credentials: Record<string, unknown>): Promise<AuthResult>;
@@ -323,6 +342,19 @@ export class AuthManager {
 	}
 
 	/** Get a registered strategy by name. */
+	/**
+	 * The event namespace a guard's events carry, resolved from its driver.
+	 * Falls back to `session_auth` when the guard cannot be resolved, so a
+	 * failure to look one up never becomes a second failure at emit time.
+	 */
+	eventPrefixFor(guardName?: string): string {
+		try {
+			return authEventPrefix(this.getStrategy(guardName).name);
+		} catch {
+			return authEventPrefix(undefined);
+		}
+	}
+
 	getStrategy(name?: string): AuthStrategy {
 		const strategyName = name ?? this.default;
 		const strategy = this.guards.get(strategyName);
@@ -382,12 +414,13 @@ export class AuthManager {
 				},
 			);
 		}
-		this.#emit("session_auth:login_attempted", {
+		const prefix = authEventPrefix(strategy.name);
+		this.#emit(`${prefix}:login_attempted`, {
 			guardName: strategyName ?? this.default,
 			user,
 		});
 		await strategy.login(user, session);
-		this.#emit("session_auth:login_succeeded", {
+		this.#emit(`${prefix}:login_succeeded`, {
 			guardName: strategyName ?? this.default,
 			user,
 			sessionId: undefined,
@@ -408,7 +441,7 @@ export class AuthManager {
 			);
 		}
 		await strategy.logout(session);
-		this.#emit("session_auth:logged_out", {
+		this.#emit(`${authEventPrefix(strategy.name)}:logged_out`, {
 			guardName: strategyName ?? this.default,
 			user: null,
 			error: null,

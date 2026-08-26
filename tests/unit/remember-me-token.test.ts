@@ -13,9 +13,11 @@ import {
 	hashSecret,
 	MemoryRememberMeTokenDriver,
 	mintRememberMeToken,
+	RememberMeToken,
 	safeCompareHashes,
 	verifyAndRecycleRememberMeToken,
 } from "../../src/RememberMeToken.js";
+import { Secret } from "../../src/Secret.js";
 
 async function seeded(ageSeconds = 3600) {
 	const driver = new MemoryRememberMeTokenDriver();
@@ -162,5 +164,104 @@ describe("warden > remember-me tokens", () => {
 
 		expect(await driver.find(mine.stored.identifier)).toBeNull();
 		expect(await driver.find(other.stored.identifier)).not.toBeNull();
+	});
+});
+
+describe("warden > RememberMeToken class (AdonisJS surface)", () => {
+	it("decodes a value the functional API produced", () => {
+		const minted = mintRememberMeToken("42", 3600);
+		const decoded = RememberMeToken.decode(minted.value);
+
+		// One encoding, two APIs: they cannot disagree about what a token is.
+		expect(decoded).not.toBe(null);
+		expect(decoded?.identifier).toBe(minted.stored.identifier);
+		expect(hashSecret(decoded?.secret.release() ?? "")).toBe(
+			minted.stored.hash,
+		);
+	});
+
+	it("returns null for a malformed value rather than throwing", () => {
+		expect(RememberMeToken.decode("garbage")).toBe(null);
+		expect(RememberMeToken.decode("")).toBe(null);
+	});
+
+	it("keeps a decoded secret out of a log", () => {
+		const minted = mintRememberMeToken("42", 3600);
+		const secret = RememberMeToken.decode(minted.value)?.secret;
+
+		// Interpolating it must not print the secret — that is the whole point
+		// of the wrapper AdonisJS returns here.
+		expect(`${secret}`).toBe("[redacted]");
+		expect(JSON.stringify({ secret })).toBe('{"secret":"[redacted]"}');
+		expect(secret?.release()).not.toBe("[redacted]");
+	});
+
+	it("verifies a secret in constant time and rejects a wrong one", () => {
+		const { secret, hash } = RememberMeToken.seed();
+		const token = new RememberMeToken({
+			identifier: "abc",
+			tokenableId: "42",
+			hash,
+			createdAt: new Date(),
+			updatedAt: new Date(),
+			expiresAt: new Date(Date.now() + 60_000),
+		});
+
+		expect(token.verify(secret)).toBe(true);
+		expect(token.verify(new Secret("not-it"))).toBe(false);
+	});
+
+	it("reports expiry", () => {
+		const base = {
+			identifier: "abc",
+			tokenableId: "42",
+			hash: "x",
+			createdAt: new Date(),
+			updatedAt: new Date(),
+		};
+		expect(
+			new RememberMeToken({
+				...base,
+				expiresAt: new Date(Date.now() - 1),
+			}).isExpired(),
+		).toBe(true);
+		expect(
+			new RememberMeToken({
+				...base,
+				expiresAt: new Date(Date.now() + 60_000),
+			}).isExpired(),
+		).toBe(false);
+	});
+
+	it("createTransientToken carries everything the store needs", () => {
+		const t = RememberMeToken.createTransientToken("42", 40, 3600);
+
+		expect(t.userId).toBe("42");
+		expect(hashSecret(t.secret.release())).toBe(t.hash);
+		expect(t.expiresAt.getTime()).toBeGreaterThan(Date.now());
+	});
+
+	it("round-trips a stored row", () => {
+		const minted = mintRememberMeToken("42", 3600);
+		const token = RememberMeToken.fromStored(minted.stored);
+
+		expect(token.toStored()).toEqual(minted.stored);
+	});
+
+	it("builds the public value when handed the secret", () => {
+		const { secret, hash } = RememberMeToken.seed();
+		const token = new RememberMeToken({
+			identifier: "abc",
+			tokenableId: "42",
+			hash,
+			createdAt: new Date(),
+			updatedAt: new Date(),
+			expiresAt: new Date(Date.now() + 60_000),
+			secret,
+		});
+
+		const decoded = RememberMeToken.decode(token.value?.release() ?? "");
+		expect(decoded?.identifier).toBe("abc");
+		expect(decoded?.secret.release()).toBe(secret.release());
 	});
 });

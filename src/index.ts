@@ -17,7 +17,11 @@ export type {
 	AuthStrategy,
 	UserPayload,
 } from "./AuthManager.js";
-export { AuthManager, type WardenEmitter } from "./AuthManager.js";
+export {
+	AuthManager,
+	authEventPrefix,
+	type WardenEmitter,
+} from "./AuthManager.js";
 export type { AuthRateLimiterConfig } from "./AuthRateLimiter.js";
 export { AuthRateLimiter } from "./AuthRateLimiter.js";
 export { AbilitiesBuilder } from "./bouncer/AbilitiesBuilder.js";
@@ -140,6 +144,7 @@ export {
 	MemoryRememberMeTokenDriver,
 	type MintedRememberMeToken,
 	mintRememberMeToken,
+	RememberMeToken,
 	type RememberMeTokenDriver,
 	type StoredRememberMeToken,
 	safeCompareHashes,
@@ -158,6 +163,7 @@ export type {
 	Scope,
 } from "./rights/types.js";
 export { scopeKey } from "./rights/types.js";
+export { Secret } from "./Secret.js";
 export type { ApiKeyConfig } from "./strategies/ApiKeyStrategy.js";
 export { ApiKeyStrategy } from "./strategies/ApiKeyStrategy.js";
 export type { BasicAuthConfig } from "./strategies/BasicAuthStrategy.js";

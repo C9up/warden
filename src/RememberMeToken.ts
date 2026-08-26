@@ -21,6 +21,7 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { Secret } from "./Secret.js";
 
 /** Bytes of entropy in a token secret. Adonis defaults to 40. */
 export const DEFAULT_SECRET_LENGTH = 40;
@@ -219,5 +220,138 @@ export class MemoryRememberMeTokenDriver implements RememberMeTokenDriver {
 				this.#rows.delete(identifier);
 			}
 		}
+	}
+}
+
+/**
+ * A remember-me token as an object, matching `@adonisjs/auth`'s
+ * `RememberMeToken` (modules/session_guard/remember_me_token.ts).
+ *
+ * The functions above are what warden's own guard uses and stay the primary
+ * API. This class exists because an app moving over calls
+ * `RememberMeToken.decode(...)` / `token.verify(secret)` directly — upstream
+ * exports it — and finding nothing under that name is a migration stopping at
+ * an import line. Both sit on the same encoding and the same hashing, so they
+ * cannot disagree about what a token is.
+ *
+ * Secrets come back wrapped in {@link Secret} so one cannot end up in a log by
+ * being interpolated into a string, which is what upstream does too.
+ */
+export class RememberMeToken {
+	/**
+	 * Split a public token value into its identifier and secret. Returns `null`
+	 * for anything malformed rather than throwing — a bad cookie is an ordinary
+	 * event, not an exception.
+	 */
+	static decode(
+		value: string,
+	): { identifier: string; secret: Secret<string> } | null {
+		const decoded = decodeTokenValue(value);
+		if (!decoded) return null;
+		return {
+			identifier: decoded.identifier,
+			secret: new Secret(decoded.secret),
+		};
+	}
+
+	/** A fresh secret and the hash to store for it. */
+	static seed(size: number = DEFAULT_SECRET_LENGTH): {
+		secret: Secret<string>;
+		hash: string;
+	} {
+		const secret = randomBytes(size).toString("base64url");
+		return { secret: new Secret(secret), hash: hashSecret(secret) };
+	}
+
+	/**
+	 * Everything the persistence layer needs for a new token, without deciding
+	 * how it is stored (upstream `createTransientToken`).
+	 *
+	 * `expiresIn` is in SECONDS, as everywhere else in this module. AdonisJS
+	 * also accepts a duration string there; warden takes the number, so the
+	 * unit is never ambiguous at a call site.
+	 */
+	static createTransientToken(
+		userId: string | number,
+		size: number,
+		expiresIn: number,
+	): {
+		secret: Secret<string>;
+		hash: string;
+		userId: string | number;
+		expiresAt: Date;
+	} {
+		const { secret, hash } = RememberMeToken.seed(size);
+		return {
+			secret,
+			hash,
+			userId,
+			expiresAt: new Date(Date.now() + expiresIn * 1000),
+		};
+	}
+
+	identifier: string;
+	tokenableId: string | number;
+	hash: string;
+	createdAt: Date;
+	updatedAt: Date;
+	expiresAt: Date;
+	/** The public `identifier.secret` value — only on a token just minted. */
+	value?: Secret<string>;
+
+	constructor(attributes: {
+		identifier: string;
+		tokenableId: string | number;
+		hash: string;
+		createdAt: Date;
+		updatedAt: Date;
+		expiresAt: Date;
+		secret?: Secret<string>;
+	}) {
+		this.identifier = attributes.identifier;
+		this.tokenableId = attributes.tokenableId;
+		this.hash = attributes.hash;
+		this.createdAt = attributes.createdAt;
+		this.updatedAt = attributes.updatedAt;
+		this.expiresAt = attributes.expiresAt;
+		if (attributes.secret) {
+			this.value = new Secret(
+				encodeTokenValue(attributes.identifier, attributes.secret.release()),
+			);
+		}
+	}
+
+	/** Build one from a stored row, whose timestamps are epoch milliseconds. */
+	static fromStored(stored: StoredRememberMeToken): RememberMeToken {
+		return new RememberMeToken({
+			identifier: stored.identifier,
+			tokenableId: stored.tokenableId,
+			hash: stored.hash,
+			createdAt: new Date(stored.createdAt),
+			updatedAt: new Date(stored.updatedAt),
+			expiresAt: new Date(stored.expiresAt),
+		});
+	}
+
+	/** The row to persist, in the shape {@link RememberMeTokenDriver} takes. */
+	toStored(): StoredRememberMeToken {
+		return {
+			identifier: this.identifier,
+			tokenableId: this.tokenableId,
+			hash: this.hash,
+			createdAt: this.createdAt.getTime(),
+			updatedAt: this.updatedAt.getTime(),
+			expiresAt: this.expiresAt.getTime(),
+		};
+	}
+
+	/** Whether the token is past its expiry. */
+	isExpired(): boolean {
+		return this.expiresAt.getTime() <= Date.now();
+	}
+
+	/** Constant-time check of a presented secret against the stored hash. */
+	verify(secret: Secret<string>): boolean {
+		return safeCompareHashes(this.hash, hashSecret(secret.release()));
 	}
 }
