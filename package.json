@@ -1,6 +1,6 @@
 {
   "name": "@c9up/warden",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "description": "Warden \u2014 Authentication & authorization for the Ream framework",
   "license": "MIT",
   "type": "module",
@@ -49,7 +49,7 @@
     }
   },
   "peerDependencies": {
-    "@c9up/ream": "^0.1.10",
+    "@c9up/ream": "^0.2.0",
     "@c9up/quasar": "^0.1.0"
   },
   "peerDependenciesMeta": {

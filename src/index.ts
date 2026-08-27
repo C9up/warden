@@ -4,6 +4,8 @@
  * @implements FR48, FR49, FR50, FR51, FR52, FR53
  */
 
+import "./augmentations.js";
+
 export type { AuthAttempt, ExtractedCredentials } from "./Authenticator.js";
 export {
 	API_KEY_GUARD_NAMES,
