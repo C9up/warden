@@ -309,6 +309,31 @@ export class Authenticator {
 	}
 
 	/**
+	 * Try the given guards in order and report whether one succeeded, without
+	 * throwing (AdonisJS `checkUsing`).
+	 *
+	 * The non-throwing sibling of {@link authenticateUsing}: `check()` is to
+	 * `authenticate()` what this is to it. A handler that wants to branch on
+	 * "is anyone signed in through either of these" had to wrap the throwing
+	 * form in a try/catch itself.
+	 */
+	async checkUsing(
+		guards?: string[],
+		options?: { loginRoute?: string },
+	): Promise<boolean> {
+		try {
+			await this.authenticateUsing(guards, options);
+			return this.isAuthenticated;
+		} catch (err) {
+			// A credential rejection is an answer, not a failure. Anything else
+			// — a crashed strategy, a config error — is still a real problem and
+			// must not be reported as "not signed in".
+			if (err instanceof E_UNAUTHORIZED_ACCESS) return false;
+			throw err;
+		}
+	}
+
+	/**
 	 * Authenticate by trying the given guards in order (default: the default
 	 * guard). Sets the user on the first success; throws `E_UNAUTHORIZED_ACCESS`
 	 * (401, carrying `redirectTo` for session guards) when all reject, or a

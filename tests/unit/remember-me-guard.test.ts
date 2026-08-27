@@ -112,3 +112,63 @@ describe("warden > remember-me on the session guard", () => {
 		).not.toBeNull();
 	});
 });
+
+describe("warden > the guard says HOW the user got here (AdonisJS viaRemember)", () => {
+	it("is false for a fresh login", async () => {
+		const { strategy } = guard();
+		await strategy.login({ id: "1" }, session() as never);
+
+		expect(strategy.viaRemember).toBe(false);
+		expect(strategy.attemptedViaRemember).toBe(false);
+	});
+
+	it("is true once a user is revived from the cookie", async () => {
+		const { strategy } = guard();
+		const value = await strategy.issueRememberMeToken({ id: "1" });
+
+		const revived = await strategy.authenticateViaRememberMeToken(value);
+
+		// This is the distinction that lets an app demand the password again
+		// before something sensitive. Nothing reported it, so a session
+		// restored from a cookie looked exactly like a fresh sign-in.
+		expect(revived).not.toBe(null);
+		expect(strategy.viaRemember).toBe(true);
+		expect(strategy.attemptedViaRemember).toBe(true);
+	});
+
+	it("records the attempt even when the cookie is rejected", async () => {
+		const { strategy } = guard();
+
+		expect(await strategy.authenticateViaRememberMeToken("garbage")).toBe(null);
+		expect(strategy.attemptedViaRemember).toBe(true);
+		expect(strategy.viaRemember).toBe(false);
+	});
+
+	it("a real login afterwards clears it", async () => {
+		const { strategy } = guard();
+		const value = await strategy.issueRememberMeToken({ id: "1" });
+		await strategy.authenticateViaRememberMeToken(value);
+		expect(strategy.viaRemember).toBe(true);
+
+		// A password was typed: a re-auth prompt must not keep firing.
+		await strategy.login({ id: "1" }, session() as never);
+		expect(strategy.viaRemember).toBe(false);
+	});
+
+	it("logout clears both", async () => {
+		const { strategy } = guard();
+		const value = await strategy.issueRememberMeToken({ id: "1" });
+		await strategy.authenticateViaRememberMeToken(value);
+
+		await strategy.logout(session() as never);
+
+		expect(strategy.viaRemember).toBe(false);
+		expect(strategy.attemptedViaRemember).toBe(false);
+	});
+
+	it("exposes the session and cookie key names", () => {
+		const { strategy } = guard();
+		expect(strategy.sessionKeyName).toBe("auth_user_id");
+		expect(strategy.rememberMeKeyName).toBe("remember_web");
+	});
+});

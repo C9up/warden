@@ -69,6 +69,8 @@ export class SessionStrategy implements AuthStrategy {
 	name = "session";
 	#config: SessionStrategyConfig;
 	#sessionKey: string;
+	#viaRemember = false;
+	#attemptedViaRemember = false;
 
 	constructor(config: SessionStrategyConfig) {
 		this.#config = config;
@@ -83,6 +85,37 @@ export class SessionStrategy implements AuthStrategy {
 	/** Whether "keep me signed in" is wired at all. */
 	get usesRememberMeTokens(): boolean {
 		return this.#config.rememberMeTokens !== undefined;
+	}
+
+	/**
+	 * Whether the current user was revived from a remember-me cookie rather
+	 * than signing in (AdonisJS `viaRemember`).
+	 *
+	 * This is the distinction that lets an app demand the password again before
+	 * something sensitive — changing an email, spending money, deleting an
+	 * account. Nothing reported it, so a session restored from a cookie looked
+	 * exactly like one where the user had just typed their password.
+	 */
+	get viaRemember(): boolean {
+		return this.#viaRemember;
+	}
+
+	/**
+	 * Whether a remember-me token was even tried on this request (AdonisJS
+	 * `attemptedViaRemember`) — true whether or not it worked.
+	 */
+	get attemptedViaRemember(): boolean {
+		return this.#attemptedViaRemember;
+	}
+
+	/** The session key the user id is stored under (AdonisJS `sessionKeyName`). */
+	get sessionKeyName(): string {
+		return this.#sessionKey;
+	}
+
+	/** The cookie key the remember-me token is stored under (AdonisJS `rememberMeKeyName`). */
+	get rememberMeKeyName(): string {
+		return this.rememberMeCookieName;
 	}
 
 	#rememberMeAge(): number {
@@ -114,6 +147,7 @@ export class SessionStrategy implements AuthStrategy {
 	): Promise<{ user: UserPayload; cookieValue: string } | null> {
 		const driver = this.#config.rememberMeTokens;
 		if (!driver) return null;
+		this.#attemptedViaRemember = true;
 
 		const recycled = await verifyAndRecycleRememberMeToken(
 			driver,
@@ -125,6 +159,7 @@ export class SessionStrategy implements AuthStrategy {
 		const user = await this.#config.findUser(recycled.userId);
 		if (!user) return null;
 
+		this.#viaRemember = true;
 		return { user, cookieValue: recycled.value };
 	}
 
@@ -197,6 +232,10 @@ export class SessionStrategy implements AuthStrategy {
 	async login(user: UserPayload, session: SessionStore): Promise<void> {
 		session.regenerate();
 		session.put(this.#sessionKey, user.id);
+		// A password was typed: this session is no longer "via remember", even
+		// if a cookie was tried earlier in the same request. Without the reset
+		// the flag would stay true and a re-auth prompt would never fire.
+		this.#viaRemember = false;
 	}
 
 	/**
@@ -218,5 +257,7 @@ export class SessionStrategy implements AuthStrategy {
 	 */
 	async logout(session: SessionStore): Promise<void> {
 		session.forget(this.#sessionKey);
+		this.#viaRemember = false;
+		this.#attemptedViaRemember = false;
 	}
 }

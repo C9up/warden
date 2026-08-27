@@ -158,6 +158,49 @@ describe("warden > Authenticator (#1) — inline-route contract", () => {
 		await expect(bad.check()).resolves.toBe(false);
 	});
 
+	it("checkUsing() is the non-throwing sibling of authenticateUsing()", async () => {
+		const manager = new AuthManager({
+			default: "jwt",
+			guards: { jwt: jwtStub },
+		});
+		const good = new Authenticator(
+			buildCtx({ manager, headers: { authorization: "Bearer good" } }).ctx,
+			manager,
+		);
+		const bad = new Authenticator(
+			buildCtx({ manager, headers: { authorization: "Bearer bad" } }).ctx,
+			manager,
+		);
+
+		// A handler branching on "is anyone signed in through either of these"
+		// had to wrap the throwing form in its own try/catch.
+		await expect(good.checkUsing(["jwt"])).resolves.toBe(true);
+		await expect(bad.checkUsing(["jwt"])).resolves.toBe(false);
+	});
+
+	it("checkUsing() still propagates a strategy crash", async () => {
+		const crashing: AuthStrategy = {
+			name: "jwt",
+			async authenticate() {
+				return { authenticated: false };
+			},
+			async verify() {
+				throw new Error("db down");
+			},
+		};
+		const manager = new AuthManager({
+			default: "jwt",
+			guards: { jwt: crashing },
+		});
+		const auth = new Authenticator(
+			buildCtx({ manager, headers: { authorization: "Bearer x" } }).ctx,
+			manager,
+		);
+
+		// A crashed strategy is a server problem, not "not signed in".
+		await expect(auth.checkUsing(["jwt"])).rejects.toBeTruthy();
+	});
+
 	it("check() still propagates a strategy crash (not swallowed as guest)", async () => {
 		const crashing: AuthStrategy = {
 			name: "jwt",
