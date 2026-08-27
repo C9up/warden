@@ -19,14 +19,31 @@ export type Action = (
 	...args: unknown[]
 ) => AuthorizerResponse;
 
-/** Boolean sugar → response; an explicit response passes through (D7). */
-export function normalizeResponse(
+/** Turns whatever an ability returned into an {@link AuthorizationResponse}. */
+export type ResponseBuilder = (
 	value: boolean | AuthorizationResponse,
-): AuthorizationResponse {
+) => AuthorizationResponse;
+
+/** The default: boolean sugar → response; an explicit response passes through (D7). */
+export const defaultResponseBuilder: ResponseBuilder = (value) => {
 	if (value instanceof AuthorizationResponse) {
 		return value;
 	}
 	return value ? AuthorizationResponse.allow() : AuthorizationResponse.deny();
+};
+
+/**
+ * Boolean sugar → response, through whatever builder is installed.
+ *
+ * `Bouncer.responseBuilder` replaces it app-wide, which is how you give every
+ * bare `return false` a house message and status instead of a naked 403
+ * (AdonisJS `Bouncer.responseBuilder`).
+ */
+export function normalizeResponse(
+	value: boolean | AuthorizationResponse,
+	builder: ResponseBuilder = defaultResponseBuilder,
+): AuthorizationResponse {
+	return builder(value);
 }
 
 /**
@@ -71,8 +88,11 @@ export async function evaluate(params: {
 		result: AuthorizationResponse,
 		...args: unknown[]
 	) => HookResponse;
+	/** Overrides how a bare boolean becomes a response. */
+	responseBuilder?: ResponseBuilder;
 }): Promise<AuthorizationResponse> {
 	const { user, action, allowGuest, run, args, before, after } = params;
+	const builder = params.responseBuilder ?? defaultResponseBuilder;
 
 	let response: AuthorizationResponse | undefined;
 
@@ -80,7 +100,7 @@ export async function evaluate(params: {
 	if (before) {
 		const early = await before(user, action, ...args);
 		if (early !== undefined) {
-			response = normalizeResponse(early);
+			response = normalizeResponse(early, builder);
 		}
 	}
 
@@ -89,7 +109,7 @@ export async function evaluate(params: {
 		if (user === null && !allowGuest) {
 			response = AuthorizationResponse.deny();
 		} else {
-			response = normalizeResponse(await run(user));
+			response = normalizeResponse(await run(user), builder);
 		}
 	}
 
@@ -98,7 +118,7 @@ export async function evaluate(params: {
 	if (after) {
 		const override = await after(user, action, response, ...args);
 		if (override !== undefined) {
-			response = normalizeResponse(override);
+			response = normalizeResponse(override, builder);
 		}
 	}
 

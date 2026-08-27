@@ -14,15 +14,15 @@
  * `@c9up/ream`.
  */
 
-import {
-	type AuthManager,
-	type AuthResult,
-	type AuthStrategy,
-	sanitizePayload,
-	type UserPayload,
+import type {
+	AuthManager,
+	AuthResult,
+	AuthStrategy,
+	UserPayload,
 } from "./AuthManager.js";
 import { E_UNAUTHORIZED_ACCESS, WardenError } from "./errors.js";
 import type { WardenContext } from "./middleware.js";
+import { sanitizePayload } from "./sanitize.js";
 import type { SessionStore } from "./strategies/SessionStrategy.js";
 
 /**

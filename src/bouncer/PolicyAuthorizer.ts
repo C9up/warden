@@ -16,6 +16,7 @@ import {
 	type Action,
 	evaluate,
 	isAction,
+	type ResponseBuilder,
 	throwAuthorizationFailure,
 } from "./evaluate.js";
 import { emptyPermissions, setPolicyContext } from "./policyContext.js";
@@ -69,7 +70,8 @@ export class PolicyAuthorizer {
 	readonly #factory: () => Promise<BasePolicy>;
 	readonly #scope: Scope;
 	readonly #resolvePermissions: () => Promise<EffectivePermissions>;
-	readonly #emitter: BouncerEmitter | undefined;
+	#emitter: BouncerEmitter | undefined;
+	readonly #responseBuilder: ResponseBuilder | undefined;
 
 	constructor(
 		user: UserPayload | null,
@@ -78,12 +80,14 @@ export class PolicyAuthorizer {
 		resolvePermissions: () => Promise<EffectivePermissions> = () =>
 			Promise.resolve(emptyPermissions(scope)),
 		emitter?: BouncerEmitter,
+		responseBuilder?: ResponseBuilder,
 	) {
 		this.#user = user;
 		this.#factory = factory;
 		this.#scope = scope;
 		this.#resolvePermissions = resolvePermissions;
 		this.#emitter = emitter;
+		this.#responseBuilder = responseBuilder;
 	}
 
 	/** Run a check and resolve to the full response (D8 — fresh policy per check). */
@@ -106,6 +110,7 @@ export class PolicyAuthorizer {
 			args,
 			before: policy.before?.bind(policy),
 			after: policy.after?.bind(policy),
+			responseBuilder: this.#responseBuilder,
 		});
 		this.#emitter?.emit("authorization:finished", {
 			user: this.#user,
@@ -116,6 +121,17 @@ export class PolicyAuthorizer {
 			response,
 		});
 		return response;
+	}
+
+	/**
+	 * Swap the event sink after construction (AdonisJS `setEmitter`).
+	 *
+	 * The Bouncer passes its own down, but an authorizer built directly — a
+	 * test, a console command — had no way to be given one.
+	 */
+	setEmitter(emitter?: BouncerEmitter): this {
+		this.#emitter = emitter;
+		return this;
 	}
 
 	/** True iff the action is authorized. Never throws on denial. */

@@ -172,3 +172,23 @@ describe("warden > the guard says HOW the user got here (AdonisJS viaRemember)",
 		expect(strategy.rememberMeKeyName).toBe("remember_web");
 	});
 });
+
+describe("warden > isLoggedOut (AdonisJS parity)", () => {
+	it("reports that logout() ran on this guard", async () => {
+		const { strategy } = guard();
+		expect(strategy.isLoggedOut).toBe(false);
+
+		// A handler that logs out and keeps working — clearing a cart, writing
+		// an audit line — could not tell the session was already gone.
+		await strategy.logout(session() as never);
+		expect(strategy.isLoggedOut).toBe(true);
+	});
+
+	it("a later login clears it", async () => {
+		const { strategy } = guard();
+		await strategy.logout(session() as never);
+
+		await strategy.login({ id: "1" }, session() as never);
+		expect(strategy.isLoggedOut).toBe(false);
+	});
+});

@@ -4,7 +4,13 @@
  * @implements FR48, FR50, FR51
  */
 
+import { Authenticator } from "./Authenticator.js";
 import { WardenError } from "./errors.js";
+import type { WardenContext } from "./middleware.js";
+import { sanitizePayload } from "./sanitize.js";
+
+export { sanitizePayload };
+
 import { MemoryRightsStore } from "./rights/MemoryRightsStore.js";
 import { RightsResolver } from "./rights/RightsResolver.js";
 import type { EffectivePermissions, Scope } from "./rights/types.js";
@@ -343,6 +349,50 @@ export class AuthManager {
 
 	/** Get a registered strategy by name. */
 	/**
+	 * An {@link Authenticator} bound to one request (AdonisJS
+	 * `createAuthenticator`).
+	 *
+	 * What the HTTP middleware builds per request. Exposed so anything outside
+	 * that path — a console command acting as a user, a background job — can
+	 * build one without reaching for the class.
+	 */
+	createAuthenticator(ctx: WardenContext): Authenticator {
+		return new Authenticator(ctx, this);
+	}
+
+	/**
+	 * What a test client needs to authenticate as a user (AdonisJS
+	 * `createAuthenticatorClient`).
+	 *
+	 * Delegates to the guard's own `authenticateAsClient`, so a guard with no
+	 * test seam says so instead of having one forged for it.
+	 */
+	createAuthenticatorClient(): {
+		use(guard?: string): {
+			authenticateAsClient(
+				...args: never[]
+			): Promise<AuthClientResponse> | AuthClientResponse;
+		};
+	} {
+		return {
+			use: (guard?: string) => {
+				const strategy = this.getStrategy(guard);
+				const seam = strategy.authenticateAsClient?.bind(strategy);
+				if (!seam) {
+					throw new WardenError(
+						"STRATEGY_HAS_NO_CLIENT",
+						`Auth strategy '${guard ?? this.default}' has no authenticateAsClient() — it cannot forge a client request.`,
+						{
+							hint: "Implement authenticateAsClient() on the strategy, or authenticate through a real login in the test.",
+						},
+					);
+				}
+				return { authenticateAsClient: seam };
+			},
+		};
+	}
+
+	/**
 	 * The event namespace a guard's events carry, resolved from its driver.
 	 * Falls back to `session_auth` when the guard cannot be resolved, so a
 	 * failure to look one up never becomes a second failure at emit time.
@@ -479,10 +529,3 @@ function isLoginCapable(
  * directly (not `AuthManager.verify`), so without this it would skip
  * the guard JWT / api-key users get.
  */
-export function sanitizePayload(user: UserPayload): void {
-	for (const key of ["__proto__", "constructor", "prototype"]) {
-		if (key in user) {
-			delete (user as Record<string, unknown>)[key];
-		}
-	}
-}

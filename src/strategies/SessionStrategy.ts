@@ -70,6 +70,7 @@ export class SessionStrategy implements AuthStrategy {
 	#config: SessionStrategyConfig;
 	#sessionKey: string;
 	#viaRemember = false;
+	#loggedOut = false;
 	#attemptedViaRemember = false;
 
 	constructor(config: SessionStrategyConfig) {
@@ -106,6 +107,16 @@ export class SessionStrategy implements AuthStrategy {
 	 */
 	get attemptedViaRemember(): boolean {
 		return this.#attemptedViaRemember;
+	}
+
+	/**
+	 * Whether `logout()` ran on this guard (AdonisJS `isLoggedOut`).
+	 *
+	 * A handler that logs out and then keeps working — clearing a cart, writing
+	 * an audit line — could not tell that the session was already gone.
+	 */
+	get isLoggedOut(): boolean {
+		return this.#loggedOut;
 	}
 
 	/** The session key the user id is stored under (AdonisJS `sessionKeyName`). */
@@ -232,6 +243,7 @@ export class SessionStrategy implements AuthStrategy {
 	async login(user: UserPayload, session: SessionStore): Promise<void> {
 		session.regenerate();
 		session.put(this.#sessionKey, user.id);
+		this.#loggedOut = false;
 		// A password was typed: this session is no longer "via remember", even
 		// if a cookie was tried earlier in the same request. Without the reset
 		// the flag would stay true and a re-auth prompt would never fire.
@@ -259,5 +271,6 @@ export class SessionStrategy implements AuthStrategy {
 		session.forget(this.#sessionKey);
 		this.#viaRemember = false;
 		this.#attemptedViaRemember = false;
+		this.#loggedOut = true;
 	}
 }

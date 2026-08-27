@@ -18,7 +18,13 @@ import type { EffectivePermissions, Scope } from "../rights/types.js";
 import { AbilitiesBuilder } from "./AbilitiesBuilder.js";
 import { AuthorizationResponse } from "./AuthorizationResponse.js";
 import type { BasePolicy } from "./BasePolicy.js";
-import { evaluate, isAction, throwAuthorizationFailure } from "./evaluate.js";
+import {
+	defaultResponseBuilder,
+	evaluate,
+	isAction,
+	type ResponseBuilder,
+	throwAuthorizationFailure,
+} from "./evaluate.js";
 import { PolicyAuthorizer } from "./PolicyAuthorizer.js";
 import { emptyPermissions } from "./policyContext.js";
 import type {
@@ -31,6 +37,20 @@ import type {
 } from "./types.js";
 
 export class Bouncer {
+	/**
+	 * How a bare boolean from an ability or a policy becomes an
+	 * {@link AuthorizationResponse} (AdonisJS `Bouncer.responseBuilder`).
+	 *
+	 * Replace it once at boot to give every `return false` a house message and
+	 * status instead of a naked 403:
+	 *
+	 * ```ts
+	 * Bouncer.responseBuilder = (value) =>
+	 *   value === false ? AuthorizationResponse.deny('Nope', 404) : normalizeResponse(value)
+	 * ```
+	 */
+	static responseBuilder: ResponseBuilder = defaultResponseBuilder;
+
 	readonly #userOrResolver: UserPayload | (() => UserPayload | null) | null;
 	/** Lazily-resolved user cache (`undefined` until `#getUser` runs). */
 	#user: UserPayload | null | undefined;
@@ -231,6 +251,7 @@ export class Bouncer {
 			this.#scope,
 			() => this.#resolvePermissions(),
 			this.#emitter,
+			Bouncer.responseBuilder,
 		);
 	}
 
@@ -328,6 +349,7 @@ export class Bouncer {
 			allowGuest: resolved.allowGuest,
 			run: (user) => resolved.execute(user, ...args),
 			args,
+			responseBuilder: Bouncer.responseBuilder,
 		});
 		this.#emit(action, response, args);
 		return response;

@@ -440,3 +440,29 @@ describe("warden > E_UNAUTHORIZED_ACCESS rendering (#6)", () => {
 		expect(err.status).toBe(401);
 	});
 });
+
+describe("warden > AuthManager factories (AdonisJS parity)", () => {
+	it("builds an authenticator for a context", () => {
+		const manager = new AuthManager({
+			default: "jwt",
+			guards: { jwt: jwtStub },
+		});
+		const { ctx } = buildCtx({ manager, headers: {} });
+
+		// What the HTTP middleware does per request; anything outside that path
+		// had to reach for the class itself.
+		expect(manager.createAuthenticator(ctx)).toBeInstanceOf(Authenticator);
+	});
+
+	it("refuses to forge a client request for a guard with no test seam", () => {
+		const manager = new AuthManager({
+			default: "jwt",
+			guards: { jwt: jwtStub },
+		});
+
+		// Saying so beats forging headers a guard never agreed to.
+		expect(() => manager.createAuthenticatorClient().use("jwt")).toThrow(
+			/authenticateAsClient/,
+		);
+	});
+});

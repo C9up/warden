@@ -254,3 +254,79 @@ describe("warden > bouncer > adonis parity fixes", () => {
 		).resolves.toBe(true);
 	});
 });
+
+describe("warden > Bouncer.responseBuilder (AdonisJS parity)", () => {
+	it("turns every bare boolean into the house response", async () => {
+		const original = Bouncer.responseBuilder;
+		try {
+			// Replace it once at boot and every `return false` gets a message and
+			// a status instead of a naked 403.
+			Bouncer.responseBuilder = (value) =>
+				value === false
+					? AuthorizationResponse.deny("Nothing here", 404)
+					: original(value);
+
+			const bouncer = new Bouncer(user());
+			const response = await bouncer.execute(Bouncer.ability(() => false));
+
+			expect(response.authorized).toBe(false);
+			expect(response.status).toBe(404);
+			expect(response.message).toBe("Nothing here");
+		} finally {
+			Bouncer.responseBuilder = original;
+		}
+	});
+
+	it("leaves an explicit response alone", async () => {
+		const bouncer = new Bouncer(user());
+		const response = await bouncer.execute(
+			Bouncer.ability(() => AuthorizationResponse.deny("Explicit", 418)),
+		);
+
+		expect(response.status).toBe(418);
+	});
+
+	it("reaches a policy too", async () => {
+		const original = Bouncer.responseBuilder;
+		try {
+			Bouncer.responseBuilder = (value) =>
+				value === false
+					? AuthorizationResponse.deny("Policy denied", 451)
+					: original(value);
+
+			class ThingPolicy extends BasePolicy {
+				update(): boolean {
+					return false;
+				}
+			}
+			const response = await new Bouncer(user())
+				.with(ThingPolicy)
+				.execute("update");
+
+			expect(response.status).toBe(451);
+		} finally {
+			Bouncer.responseBuilder = original;
+		}
+	});
+});
+
+describe("warden > PolicyAuthorizer.setEmitter (AdonisJS parity)", () => {
+	it("takes an emitter after construction", async () => {
+		const emit = vi.fn();
+		class ThingPolicy extends BasePolicy {
+			update(): boolean {
+				return true;
+			}
+		}
+		// An authorizer built directly — a test, a console command — had no way
+		// to be given one.
+		const authorizer = new Bouncer(user()).with(ThingPolicy);
+		expect(authorizer.setEmitter({ emit })).toBe(authorizer);
+
+		await authorizer.execute("update");
+		expect(emit).toHaveBeenCalledWith(
+			"authorization:finished",
+			expect.objectContaining({ action: "update" }),
+		);
+	});
+});
