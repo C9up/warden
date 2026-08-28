@@ -73,6 +73,7 @@
     "test:integration": "vitest run -c vitest.integration.config.ts"
   },
   "devDependencies": {
+    "@c9up/ream": "^0.2.0",
     "@biomejs/biome": "^2.4.10",
     "@c9up/quasar": "^0.1.0",
     "@types/node": "^22.19.15",
