@@ -15,6 +15,12 @@ export class AuthorizationResponse {
 	/** i18n binding set via {@link t} (Adonis `AuthorizationResponse.t`). */
 	translation?: { identifier: string; data?: Record<string, unknown> };
 
+	/**
+	 * Private because a response is only ever built through allow() / deny(), so the pair stays consistent.
+	 *
+	 * `private` and not `#`: a private CONSTRUCTOR has no native form. It is the
+	 * one place the keyword expresses something `#` cannot.
+	 */
 	private constructor(authorized: boolean, message?: string, status?: number) {
 		this.authorized = authorized;
 		this.message = message;

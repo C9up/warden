@@ -146,9 +146,9 @@ export interface WardenEmitter {
 export class AuthManager {
 	// AdonisJS names: `guards` (name → strategy) and `default` (the guard used
 	// when none is named). Renamed from the previous `strategies`/`defaultStrategy`.
-	private guards: Map<string, AuthStrategy> = new Map();
-	private default: string;
-	private readonly rights: RightsResolver;
+	#guards: Map<string, AuthStrategy> = new Map();
+	#default: string;
+	readonly #rights: RightsResolver;
 
 	/**
 	 * Where auth events go. Structural and optional: warden is a leaf and must
@@ -195,10 +195,10 @@ export class AuthManager {
 				"AuthManager: config must supply `default` + `guards` (or the legacy `defaultStrategy` + `strategies`).",
 			);
 		}
-		this.default = defaultGuard;
-		this.rights = config.rights ?? new RightsResolver(new MemoryRightsStore());
+		this.#default = defaultGuard;
+		this.#rights = config.rights ?? new RightsResolver(new MemoryRightsStore());
 		for (const [name, strategy] of Object.entries(guards)) {
-			this.guards.set(name, strategy);
+			this.#guards.set(name, strategy);
 		}
 		// Fail-fast at construction: an AuthManager with zero guards is a
 		// configuration bug. Previously, an empty `guards: {}` passed the
@@ -206,13 +206,13 @@ export class AuthManager {
 		// runtime when `getStrategy('jwt')` threw — opaque 401 or 500 instead
 		// of a boot-time INVALID_CONFIG that points the operator at the missing
 		// `config.auth.jwt` (or other guard).
-		if (this.guards.size === 0) {
+		if (this.#guards.size === 0) {
 			throw new WardenError(
 				"INVALID_CONFIG",
 				`AuthManager: no authentication guards registered. Configure at least one guard (e.g. config.warden.auth.jwt) before booting WardenProvider.`,
 			);
 		}
-		if (!this.guards.has(defaultGuard)) {
+		if (!this.#guards.has(defaultGuard)) {
 			throw new WardenError(
 				"INVALID_CONFIG",
 				`default guard '${defaultGuard}' is not present in guards`,
@@ -285,7 +285,7 @@ export class AuthManager {
 		if (!isTokenIssuer(strategy)) {
 			throw new WardenError(
 				"STRATEGY_CANNOT_ISSUE",
-				`Auth strategy '${strategyName ?? this.default}' cannot issue tokens.`,
+				`Auth strategy '${strategyName ?? this.#default}' cannot issue tokens.`,
 				{
 					hint: "issueFor() needs a token-minting strategy (e.g. JwtStrategy with signToken). Session / API-key strategies don't mint tokens.",
 				},
@@ -306,7 +306,7 @@ export class AuthManager {
 		user: UserPayload,
 		scope: Scope = "global",
 	): Promise<EffectivePermissions> {
-		return this.rights.resolve(user, scope);
+		return this.#rights.resolve(user, scope);
 	}
 
 	/**
@@ -381,7 +381,7 @@ export class AuthManager {
 				if (!seam) {
 					throw new WardenError(
 						"STRATEGY_HAS_NO_CLIENT",
-						`Auth strategy '${guard ?? this.default}' has no authenticateAsClient() — it cannot forge a client request.`,
+						`Auth strategy '${guard ?? this.#default}' has no authenticateAsClient() — it cannot forge a client request.`,
 						{
 							hint: "Implement authenticateAsClient() on the strategy, or authenticate through a real login in the test.",
 						},
@@ -406,8 +406,8 @@ export class AuthManager {
 	}
 
 	getStrategy(name?: string): AuthStrategy {
-		const strategyName = name ?? this.default;
-		const strategy = this.guards.get(strategyName);
+		const strategyName = name ?? this.#default;
+		const strategy = this.#guards.get(strategyName);
 		if (!strategy) {
 			throw new WardenError(
 				"STRATEGY_NOT_FOUND",
@@ -426,17 +426,17 @@ export class AuthManager {
 	 * declares none.
 	 */
 	get defaultStrategyName(): string {
-		return this.default;
+		return this.#default;
 	}
 
 	/** Register a new strategy at runtime. */
 	registerStrategy(name: string, strategy: AuthStrategy): void {
-		this.guards.set(name, strategy);
+		this.#guards.set(name, strategy);
 	}
 
 	/** Get all registered strategy names. */
 	getStrategyNames(): string[] {
-		return [...this.guards.keys()];
+		return [...this.#guards.keys()];
 	}
 
 	/**
@@ -458,7 +458,7 @@ export class AuthManager {
 		if (!isLoginCapable(strategy)) {
 			throw new WardenError(
 				"STRATEGY_CANNOT_LOGIN",
-				`Auth strategy '${strategyName ?? this.default}' does not support session login.`,
+				`Auth strategy '${strategyName ?? this.#default}' does not support session login.`,
 				{
 					hint: "login()/logout() need a stateful guard (e.g. SessionStrategy). JWT / API-key guards are stateless — mint a token with issueFor() instead.",
 				},
@@ -466,12 +466,12 @@ export class AuthManager {
 		}
 		const prefix = authEventPrefix(strategy.name);
 		this.#emit(`${prefix}:login_attempted`, {
-			guardName: strategyName ?? this.default,
+			guardName: strategyName ?? this.#default,
 			user,
 		});
 		await strategy.login(user, session);
 		this.#emit(`${prefix}:login_succeeded`, {
-			guardName: strategyName ?? this.default,
+			guardName: strategyName ?? this.#default,
 			user,
 			sessionId: undefined,
 		});
@@ -487,12 +487,12 @@ export class AuthManager {
 		if (!isLoginCapable(strategy)) {
 			throw new WardenError(
 				"STRATEGY_CANNOT_LOGIN",
-				`Auth strategy '${strategyName ?? this.default}' does not support session logout.`,
+				`Auth strategy '${strategyName ?? this.#default}' does not support session logout.`,
 			);
 		}
 		await strategy.logout(session);
 		this.#emit(`${authEventPrefix(strategy.name)}:logged_out`, {
-			guardName: strategyName ?? this.default,
+			guardName: strategyName ?? this.#default,
 			user: null,
 			error: null,
 		});

@@ -18,17 +18,17 @@ export interface BlacklistDriver {
 
 /** In-memory blacklist for development. */
 export class MemoryBlacklistDriver implements BlacklistDriver {
-	private entries: Map<string, number> = new Map();
+	#entries: Map<string, number> = new Map();
 
 	async add(jti: string, expiresAt: number): Promise<void> {
-		this.entries.set(jti, expiresAt);
+		this.#entries.set(jti, expiresAt);
 	}
 
 	async has(jti: string): Promise<boolean> {
-		const expiresAt = this.entries.get(jti);
+		const expiresAt = this.#entries.get(jti);
 		if (expiresAt === undefined) return false;
 		if (expiresAt < Date.now()) {
-			this.entries.delete(jti);
+			this.#entries.delete(jti);
 			return false;
 		}
 		return true;
@@ -36,8 +36,8 @@ export class MemoryBlacklistDriver implements BlacklistDriver {
 
 	async cleanup(): Promise<void> {
 		const now = Date.now();
-		for (const [jti, exp] of this.entries) {
-			if (exp < now) this.entries.delete(jti);
+		for (const [jti, exp] of this.#entries) {
+			if (exp < now) this.#entries.delete(jti);
 		}
 	}
 }

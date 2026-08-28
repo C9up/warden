@@ -23,5 +23,3 @@ declare module "@c9up/ream/types" {
 		[guardName: string]: GuardAccessor;
 	}
 }
-
-export type {};

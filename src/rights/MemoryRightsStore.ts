@@ -15,11 +15,11 @@ import { type RightsStore, type Scope, scopeKey } from "./types.js";
 
 export class MemoryRightsStore implements RightsStore {
 	/** scopeKey → role → permissions */
-	private readonly roleDefs = new Map<string, Map<string, Set<string>>>();
+	readonly #roleDefs = new Map<string, Map<string, Set<string>>>();
 	/** scopeKey → userId → roles */
-	private readonly userRoleMap = new Map<string, Map<string, Set<string>>>();
+	readonly #userRoleMap = new Map<string, Map<string, Set<string>>>();
 	/** scopeKey → userId → directly granted permissions */
-	private readonly userGrantMap = new Map<string, Map<string, Set<string>>>();
+	readonly #userGrantMap = new Map<string, Map<string, Set<string>>>();
 
 	// — read contract —
 
@@ -27,15 +27,15 @@ export class MemoryRightsStore implements RightsStore {
 		role: string,
 		scope: Scope,
 	): Promise<readonly string[]> {
-		return snapshot(this.roleDefs.get(scopeKey(scope))?.get(role));
+		return snapshot(this.#roleDefs.get(scopeKey(scope))?.get(role));
 	}
 
 	async userRoles(userId: string, scope: Scope): Promise<readonly string[]> {
-		return snapshot(this.userRoleMap.get(scopeKey(scope))?.get(userId));
+		return snapshot(this.#userRoleMap.get(scopeKey(scope))?.get(userId));
 	}
 
 	async userGrants(userId: string, scope: Scope): Promise<readonly string[]> {
-		return snapshot(this.userGrantMap.get(scopeKey(scope))?.get(userId));
+		return snapshot(this.#userGrantMap.get(scopeKey(scope))?.get(userId));
 	}
 
 	// — seeding (in-memory driver only; not part of RightsStore) —
@@ -45,24 +45,24 @@ export class MemoryRightsStore implements RightsStore {
 		permissions: readonly string[],
 		scope: Scope = "global",
 	): this {
-		const set = bucket(this.roleDefs, scopeKey(scope), role);
+		const set = bucket(this.#roleDefs, scopeKey(scope), role);
 		set.clear();
 		for (const perm of permissions) set.add(perm);
 		return this;
 	}
 
 	assignRole(userId: string, role: string, scope: Scope = "global"): this {
-		bucket(this.userRoleMap, scopeKey(scope), userId).add(role);
+		bucket(this.#userRoleMap, scopeKey(scope), userId).add(role);
 		return this;
 	}
 
 	grant(userId: string, permission: string, scope: Scope = "global"): this {
-		bucket(this.userGrantMap, scopeKey(scope), userId).add(permission);
+		bucket(this.#userGrantMap, scopeKey(scope), userId).add(permission);
 		return this;
 	}
 
 	revoke(userId: string, permission: string, scope: Scope = "global"): this {
-		this.userGrantMap.get(scopeKey(scope))?.get(userId)?.delete(permission);
+		this.#userGrantMap.get(scopeKey(scope))?.get(userId)?.delete(permission);
 		return this;
 	}
 }

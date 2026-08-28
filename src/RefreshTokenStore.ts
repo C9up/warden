@@ -27,36 +27,36 @@ export interface RefreshTokenDriver {
 
 /** In-memory driver for development. */
 export class MemoryRefreshTokenDriver implements RefreshTokenDriver {
-	private tokens: Map<string, StoredRefreshToken> = new Map();
+	#tokens: Map<string, StoredRefreshToken> = new Map();
 
 	async store(token: StoredRefreshToken): Promise<void> {
-		this.tokens.set(token.token, token);
+		this.#tokens.set(token.token, token);
 	}
 
 	async find(token: string): Promise<StoredRefreshToken | null> {
-		const stored = this.tokens.get(token);
+		const stored = this.#tokens.get(token);
 		if (!stored) return null;
 		if (stored.expiresAt < Date.now()) {
-			this.tokens.delete(token);
+			this.#tokens.delete(token);
 			return null;
 		}
 		return stored;
 	}
 
 	async revoke(token: string): Promise<void> {
-		this.tokens.delete(token);
+		this.#tokens.delete(token);
 	}
 
 	async revokeAllForUser(userId: string | number): Promise<void> {
-		for (const [key, val] of this.tokens) {
-			if (val.userId === userId) this.tokens.delete(key);
+		for (const [key, val] of this.#tokens) {
+			if (val.userId === userId) this.#tokens.delete(key);
 		}
 	}
 
 	async cleanup(): Promise<void> {
 		const now = Date.now();
-		for (const [key, val] of this.tokens) {
-			if (val.expiresAt < now) this.tokens.delete(key);
+		for (const [key, val] of this.#tokens) {
+			if (val.expiresAt < now) this.#tokens.delete(key);
 		}
 	}
 }
