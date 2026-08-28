@@ -21,15 +21,14 @@ const platformMap: Record<string, string> = {
 	"win32-x64": "win32-x64-msvc",
 };
 
-export interface NativeWarden {
-	jwtSign(payload: string, secret: string): string;
-	jwtVerify(token: string, secret: string): string;
-	constantTimeEq(a: string, b: string): boolean;
-	hmacSign(data: string, secret: string): string;
-	hmacVerify(data: string, signature: string, secret: string): boolean;
-	randomBytes(len: number): string;
-	randomHex(len: number): string;
-}
+/**
+ * The engine's surface, as the Rust declares it.
+ *
+ * Derived from `./native/generated.js` — written by `pnpm build:napi-types`
+ * from napi-derive's own `type-def` output — rather than restated here, where
+ * nothing would notice a `pub fn` gaining a parameter or changing its return.
+ */
+export type NativeWarden = typeof import("./native/generated.js");
 
 let native: NativeWarden | undefined;
 

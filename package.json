@@ -63,7 +63,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "build:rust": "cargo build --release -p warden-engine-napi",
-    "build:napi": "pnpm build:rust && node scripts/copy-napi.mjs",
+    "build:napi": "pnpm build:rust && pnpm build:napi-types && node scripts/copy-napi.mjs",
+    "build:napi-types": "node scripts/build-napi-types.mjs",
     "test": "vitest run",
     "test:rust": "cargo test -p warden-engine",
     "lint": "biome check src/",
