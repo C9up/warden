@@ -24,8 +24,13 @@ export class FirstContactManager {
 		this.#drivers.set(name, driver);
 	}
 
-	redirect(name: string, state?: string): string {
-		return this.use(name).redirectUrl(state);
+	/**
+	 * Where to send the user. `codeVerifier` is only read by providers that
+	 * require PKCE — mint one with `createCodeVerifier()` and store it beside
+	 * the state.
+	 */
+	redirect(name: string, state?: string, codeVerifier?: string): string {
+		return this.use(name).redirectUrl(state, codeVerifier);
 	}
 
 	/**
@@ -38,6 +43,7 @@ export class FirstContactManager {
 		code: string,
 		state?: string,
 		expectedState?: string,
+		codeVerifier?: string,
 	): Promise<{ user: OAuthUser; token: OAuthToken }> {
 		if (!expectedState) {
 			throw new Error(
@@ -45,7 +51,7 @@ export class FirstContactManager {
 					`Store the state from redirect() in the session and pass it here.`,
 			);
 		}
-		return this.use(name).callback(code, state, expectedState);
+		return this.use(name).callback(code, state, expectedState, codeVerifier);
 	}
 
 	get registeredDrivers(): string[] {

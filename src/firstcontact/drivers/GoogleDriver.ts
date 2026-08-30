@@ -2,79 +2,30 @@
  * Google OAuth2 driver for FirstContact.
  */
 
-import type {
-	FirstContactDriver,
-	OAuthConfig,
-	OAuthToken,
-	OAuthUser,
-} from "../types.js";
-import { assertOAuthState } from "../types.js";
+import { Oauth2Driver, str } from "../Oauth2Driver.js";
+import type { OAuthUser } from "../types.js";
 
-export class GoogleDriver implements FirstContactDriver {
-	constructor(private config: OAuthConfig) {}
+export class GoogleDriver extends Oauth2Driver {
+	protected readonly provider = "Google";
+	protected readonly authorizeUrl =
+		"https://accounts.google.com/o/oauth2/v2/auth";
+	protected readonly accessTokenUrl = "https://oauth2.googleapis.com/token";
+	protected readonly userInfoUrl =
+		"https://www.googleapis.com/oauth2/v2/userinfo";
+	protected readonly defaultScopes = ["openid", "email", "profile"] as const;
 
-	redirectUrl(state?: string): string {
-		const params = new URLSearchParams({
-			client_id: this.config.clientId,
-			redirect_uri: this.config.callbackUrl,
-			response_type: "code",
-			scope: (this.config.scopes ?? ["openid", "email", "profile"]).join(" "),
-			access_type: "offline",
-			...(state ? { state } : {}),
-		});
-		return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+	/** Asking for offline access is what makes Google issue a refresh token. */
+	protected override authorizeParams(): Record<string, string> {
+		return { access_type: "offline" };
 	}
 
-	async callback(
-		code: string,
-		state?: string,
-		expectedState?: string,
-	): Promise<{ user: OAuthUser; token: OAuthToken }> {
-		// CSRF protection: validate state matches what we sent in redirectUrl().
-		assertOAuthState(state, expectedState);
-		const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-			method: "POST",
-			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: new URLSearchParams({
-				code,
-				client_id: this.config.clientId,
-				client_secret: this.config.clientSecret,
-				redirect_uri: this.config.callbackUrl,
-				grant_type: "authorization_code",
-			}),
-		});
-		if (!tokenRes.ok) {
-			throw new Error(
-				`Google OAuth token exchange failed (HTTP ${tokenRes.status})`,
-			);
-		}
-		const tokens = (await tokenRes.json()) as Record<string, unknown>;
-		if (!tokens.access_token)
-			throw new Error("Google OAuth: no access_token in response");
-
-		const userRes = await fetch(
-			"https://www.googleapis.com/oauth2/v2/userinfo",
-			{
-				headers: { Authorization: `Bearer ${tokens.access_token}` },
-			},
-		);
-		if (!userRes.ok)
-			throw new Error(`Google userinfo failed (${userRes.status})`);
-		const raw = (await userRes.json()) as Record<string, unknown>;
-
+	protected mapUser(raw: Record<string, unknown>): OAuthUser {
 		return {
-			user: {
-				id: String(raw.id ?? ""),
-				email: String(raw.email ?? ""),
-				name: String(raw.name ?? ""),
-				avatarUrl: raw.picture as string | undefined,
-				raw,
-			},
-			token: {
-				accessToken: String(tokens.access_token),
-				refreshToken: tokens.refresh_token as string | undefined,
-				expiresIn: tokens.expires_in as number | undefined,
-			},
+			id: String(raw.id ?? ""),
+			email: String(raw.email ?? ""),
+			name: String(raw.name ?? ""),
+			avatarUrl: str(raw, "picture"),
+			raw,
 		};
 	}
 }

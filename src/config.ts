@@ -18,8 +18,14 @@
 import type { AuthStrategy, UserPayload } from "./AuthManager.js";
 import type { BasePolicy } from "./bouncer/BasePolicy.js";
 import type { Ability } from "./bouncer/types.js";
+import { DiscordDriver } from "./firstcontact/drivers/DiscordDriver.js";
+import { FacebookDriver } from "./firstcontact/drivers/FacebookDriver.js";
 import { GitHubDriver } from "./firstcontact/drivers/GitHubDriver.js";
 import { GoogleDriver } from "./firstcontact/drivers/GoogleDriver.js";
+import { LinkedInDriver } from "./firstcontact/drivers/LinkedInDriver.js";
+import { LinkedInMemberDriver } from "./firstcontact/drivers/LinkedInMemberDriver.js";
+import { SpotifyDriver } from "./firstcontact/drivers/SpotifyDriver.js";
+import { TwitterDriver } from "./firstcontact/drivers/TwitterDriver.js";
 import type { FirstContactDriver, OAuthConfig } from "./firstcontact/types.js";
 import type { MfaManager } from "./mfa/MfaManager.js";
 import type { RightsStore, Scope } from "./rights/types.js";
@@ -105,11 +111,35 @@ export type SocialDriverFactory = () => FirstContactDriver;
  * selects costs nothing to declare.
  */
 export const socials = {
-	google(config: OAuthConfig): SocialDriverFactory {
-		return () => new GoogleDriver(config);
+	discord(config: OAuthConfig): SocialDriverFactory {
+		return () => new DiscordDriver(config);
+	},
+	facebook(config: OAuthConfig): SocialDriverFactory {
+		return () => new FacebookDriver(config);
 	},
 	github(config: OAuthConfig): SocialDriverFactory {
 		return () => new GitHubDriver(config);
+	},
+	google(config: OAuthConfig): SocialDriverFactory {
+		return () => new GoogleDriver(config);
+	},
+	/** LinkedIn through OpenID Connect — what a new application is issued. */
+	linkedin(config: OAuthConfig): SocialDriverFactory {
+		return () => new LinkedInDriver(config);
+	},
+	/**
+	 * LinkedIn through the older member API, for an application whose LinkedIn
+	 * app still has `r_liteprofile` / `r_emailaddress`.
+	 */
+	linkedinMember(config: OAuthConfig): SocialDriverFactory {
+		return () => new LinkedInMemberDriver(config);
+	},
+	spotify(config: OAuthConfig): SocialDriverFactory {
+		return () => new SpotifyDriver(config);
+	},
+	/** X requires PKCE — see `createCodeVerifier()`. */
+	twitter(config: OAuthConfig): SocialDriverFactory {
+		return () => new TwitterDriver(config);
 	},
 };
 

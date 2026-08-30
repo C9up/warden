@@ -100,7 +100,7 @@ describe("warden > GitHubDriver", () => {
 		stubFetch(res(true, 200, { access_token: "tok" }), res(false, 403, {}));
 		await expect(
 			new GitHubDriver(config).callback("code", "s", "s"),
-		).rejects.toThrow(/user API failed.*403/);
+		).rejects.toThrow(/profile request failed.*403/);
 	});
 
 	it("maps the user and token on success (falls back login→name, id→string)", async () => {
@@ -178,6 +178,6 @@ describe("warden > GoogleDriver", () => {
 		stubFetch(res(true, 200, { access_token: "tok" }), res(false, 500, {}));
 		await expect(
 			new GoogleDriver(config).callback("code", "s", "s"),
-		).rejects.toThrow(/userinfo failed.*500/);
+		).rejects.toThrow(/profile request failed.*500/);
 	});
 });

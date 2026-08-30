@@ -7,6 +7,13 @@ export interface OAuthConfig {
 	clientSecret: string;
 	callbackUrl: string;
 	scopes?: string[];
+	/**
+	 * Extra parameters appended to the authorize URL — a provider's own knobs
+	 * (`prompt`, `display`, `show_dialog`, `guild_id`, …) without a config type
+	 * per provider. They are applied after the driver's own defaults, so this
+	 * can also override one.
+	 */
+	authorizeParams?: Record<string, string>;
 }
 
 export interface OAuthUser {
@@ -24,16 +31,24 @@ export interface OAuthToken {
 }
 
 export interface FirstContactDriver {
-	redirectUrl(state?: string): string;
+	/**
+	 * Where to send the user. `codeVerifier` is only read by providers that
+	 * require PKCE, and those refuse to build a URL without it.
+	 */
+	redirectUrl(state?: string, codeVerifier?: string): string;
 	/**
 	 * Handle the OAuth callback. `state` MUST be validated against the value
 	 * originally passed to `redirectUrl()` to prevent CSRF login attacks.
 	 * Throws if state is missing or mismatched.
+	 *
+	 * `codeVerifier` is the value stored alongside the state at redirect time,
+	 * for the providers that require PKCE.
 	 */
 	callback(
 		code: string,
 		state?: string,
 		expectedState?: string,
+		codeVerifier?: string,
 	): Promise<{ user: OAuthUser; token: OAuthToken }>;
 }
 
