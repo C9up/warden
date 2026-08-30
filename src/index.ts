@@ -46,7 +46,6 @@ export type {
 } from "./bouncer/types.js";
 export type {
 	GuardFactory,
-	SocialDriverFactory,
 	WardenConfig,
 } from "./config.js";
 export {
@@ -55,7 +54,6 @@ export {
 	defineConfig,
 	jwtGuard,
 	sessionGuard,
-	socials,
 } from "./config.js";
 export { configure } from "./configure.js";
 export {
@@ -63,29 +61,6 @@ export {
 	E_UNAUTHORIZED_ACCESS,
 	WardenError,
 } from "./errors.js";
-export { DiscordDriver } from "./firstcontact/drivers/DiscordDriver.js";
-export { FacebookDriver } from "./firstcontact/drivers/FacebookDriver.js";
-export { GitHubDriver } from "./firstcontact/drivers/GitHubDriver.js";
-export { GoogleDriver } from "./firstcontact/drivers/GoogleDriver.js";
-export { LinkedInDriver } from "./firstcontact/drivers/LinkedInDriver.js";
-export { LinkedInOpenidConnectDriver } from "./firstcontact/drivers/LinkedInOpenidConnectDriver.js";
-export { SpotifyDriver } from "./firstcontact/drivers/SpotifyDriver.js";
-export { TwitterDriver } from "./firstcontact/drivers/TwitterDriver.js";
-export { TwitterXDriver } from "./firstcontact/drivers/TwitterXDriver.js";
-export { FirstContactManager } from "./firstcontact/FirstContactManager.js";
-export {
-	createCodeVerifier,
-	Oauth2Driver,
-} from "./firstcontact/Oauth2Driver.js";
-export type {
-	EmailVerificationState,
-	FirstContactDriver,
-	OAuthConfig,
-	OAuthToken,
-	OAuthUser,
-	RedirectRequest,
-} from "./firstcontact/types.js";
-export { assertOAuthState } from "./firstcontact/types.js";
 export {
 	Guard,
 	getGuardMetadata,
