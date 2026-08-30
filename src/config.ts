@@ -61,7 +61,14 @@ export interface JwtConfig {
  * A guard entry in the AdonisJS-style config — an {@link AuthStrategy} instance,
  * built via {@link jwtGuard}/{@link sessionGuard}/{@link apiKeyGuard}. Named a
  * "factory" for AdonisJS symmetry (`sessionGuard({...})`), though Warden guards
- * are shared per-app instances (the per-request state lives on the Authenticator).
+ * are shared per-app instances rather than one built per request.
+ *
+ * Because the instance is shared, a guard must hold NO per-request state: the
+ * flags a request asks about — `viaRemember`, `attemptedViaRemember`,
+ * `isLoggedOut` — live on the per-request guard the Authenticator hands out
+ * (`auth.use(name)`), and a strategy method records into the state it is
+ * given. A flag stored on the strategy would answer the next request with the
+ * previous one's truth.
  */
 export type GuardFactory = AuthStrategy;
 

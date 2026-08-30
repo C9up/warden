@@ -172,9 +172,13 @@ export {
 export type { JwtClaims, JwtStrategyConfig } from "./strategies/JwtStrategy.js";
 export { generateJwtSecret, JwtStrategy } from "./strategies/JwtStrategy.js";
 export type {
+	SessionGuardState,
 	SessionStore,
 	SessionStrategyConfig,
 } from "./strategies/SessionStrategy.js";
-export { SessionStrategy } from "./strategies/SessionStrategy.js";
+export {
+	createSessionGuardState,
+	SessionStrategy,
+} from "./strategies/SessionStrategy.js";
 export type { BlacklistDriver } from "./TokenBlacklist.js";
 export { MemoryBlacklistDriver, TokenBlacklist } from "./TokenBlacklist.js";

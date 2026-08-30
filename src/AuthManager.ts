@@ -14,7 +14,10 @@ export { sanitizePayload };
 import { MemoryRightsStore } from "./rights/MemoryRightsStore.js";
 import { RightsResolver } from "./rights/RightsResolver.js";
 import type { EffectivePermissions, Scope } from "./rights/types.js";
-import type { SessionStore } from "./strategies/SessionStrategy.js";
+import type {
+	SessionGuardState,
+	SessionStore,
+} from "./strategies/SessionStrategy.js";
 
 export interface UserPayload {
 	id: string;
@@ -453,6 +456,7 @@ export class AuthManager {
 		user: UserPayload,
 		session: SessionStore,
 		strategyName?: string,
+		state?: SessionGuardState,
 	): Promise<void> {
 		const strategy = this.getStrategy(strategyName);
 		if (!isLoginCapable(strategy)) {
@@ -469,7 +473,7 @@ export class AuthManager {
 			guardName: strategyName ?? this.#default,
 			user,
 		});
-		await strategy.login(user, session);
+		await strategy.login(user, session, state);
 		this.#emit(`${prefix}:login_succeeded`, {
 			guardName: strategyName ?? this.#default,
 			user,
@@ -478,11 +482,40 @@ export class AuthManager {
 	}
 
 	/**
+	 * Revive a user from a remember-me cookie through a session guard, recording
+	 * the attempt on the caller's per-request `state`.
+	 *
+	 * The returned `cookieValue` must replace the one the browser holds — the
+	 * token is single-use and recycled on every successful revival.
+	 */
+	async authenticateViaRememberMeToken(
+		cookieValue: unknown,
+		strategyName?: string,
+		state?: SessionGuardState,
+	): Promise<{ user: UserPayload; cookieValue: string } | null> {
+		const strategy = this.getStrategy(strategyName);
+		if (!isRememberMeCapable(strategy)) {
+			throw new WardenError(
+				"STRATEGY_CANNOT_LOGIN",
+				`Auth strategy '${strategyName ?? this.#default}' has no remember-me tokens.`,
+				{
+					hint: "Remember-me is a session-guard feature. Configure `rememberMeTokens` on the guard, or implement authenticateViaRememberMeToken() on your own.",
+				},
+			);
+		}
+		return strategy.authenticateViaRememberMeToken(cookieValue, state);
+	}
+
+	/**
 	 * Log a user out of a session-capable guard (AdonisJS `auth.use('web').logout()`
 	 * parity). Delegates to the guard's `logout()`. Throws if the resolved guard
 	 * cannot log out.
 	 */
-	async logout(session: SessionStore, strategyName?: string): Promise<void> {
+	async logout(
+		session: SessionStore,
+		strategyName?: string,
+		state?: SessionGuardState,
+	): Promise<void> {
 		const strategy = this.getStrategy(strategyName);
 		if (!isLoginCapable(strategy)) {
 			throw new WardenError(
@@ -490,7 +523,7 @@ export class AuthManager {
 				`Auth strategy '${strategyName ?? this.#default}' does not support session logout.`,
 			);
 		}
-		await strategy.logout(session);
+		await strategy.logout(session, state);
 		this.#emit(`${authEventPrefix(strategy.name)}:logged_out`, {
 			guardName: strategyName ?? this.#default,
 			user: null,
@@ -500,9 +533,38 @@ export class AuthManager {
 }
 
 /** A guard that can start/stop a session for a resolved user (e.g. SessionStrategy). */
+/** A guard that can revive a user from a remember-me cookie. */
+interface RememberMeCapable {
+	authenticateViaRememberMeToken(
+		cookieValue: unknown,
+		state?: SessionGuardState,
+	): Promise<{ user: UserPayload; cookieValue: string } | null>;
+}
+
+/**
+ * Capability check for {@link AuthManager.authenticateViaRememberMeToken}.
+ *
+ * Structural, like {@link isLoginCapable} beside it, and NOT an `instanceof`:
+ * a guard an application wrote itself, carrying the same method, is as capable
+ * as the one shipped here — refusing it would make the built-in strategy the
+ * only one that can ever hold a remember-me token.
+ */
+function isRememberMeCapable(
+	strategy: AuthStrategy,
+): strategy is AuthStrategy & RememberMeCapable {
+	return (
+		"authenticateViaRememberMeToken" in strategy &&
+		typeof strategy.authenticateViaRememberMeToken === "function"
+	);
+}
+
 interface LoginCapable {
-	login(user: UserPayload, session: SessionStore): Promise<void>;
-	logout(session: SessionStore): Promise<void>;
+	login(
+		user: UserPayload,
+		session: SessionStore,
+		state?: SessionGuardState,
+	): Promise<void>;
+	logout(session: SessionStore, state?: SessionGuardState): Promise<void>;
 }
 
 /**

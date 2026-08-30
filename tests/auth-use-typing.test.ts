@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import type { AuthState } from "@c9up/ream";
+import { describe, expect, it } from "vitest";
 import type { GuardAccessor } from "../src/Authenticator.js";
 import "../src/index.js";
 

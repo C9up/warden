@@ -101,6 +101,8 @@ export interface WardenContext {
 	request: {
 		/** Ream's `HttpContext` exposes headers as a METHOD, not a property. */
 		headers(): Record<string, string>;
+		/** Read the encrypted remember-me cookie back. Optional, like its writer. */
+		encryptedCookie?: (name: string) => string | null;
 	};
 	/**
 	 * Per-request IoC resolver (Ream's `ctx.containerResolver`). Warden resolves
@@ -111,6 +113,21 @@ export interface WardenContext {
 	response: {
 		status: (code: number) => unknown;
 		json: (data: unknown) => void;
+		/**
+		 * Write an ENCRYPTED cookie, for the remember-me token. Optional: a
+		 * host without it simply cannot offer "keep me signed in", and
+		 * `login(user, true)` says so rather than pretending.
+		 *
+		 * Encrypted and not merely signed, because the value IS the credential
+		 * — anyone who reads it can present it.
+		 */
+		encryptedCookie?: (
+			name: string,
+			value: string,
+			options?: Record<string, unknown>,
+		) => unknown;
+		/** Drop a cookie (used to clear the remember-me one). */
+		clearCookie?: (name: string, options?: Record<string, unknown>) => unknown;
 		/**
 		 * Redirect the response (Ream's `ctx.response.redirect`). Optional so a
 		 * minimal host without it still gets the 401 JSON fallback — Warden does

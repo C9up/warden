@@ -23,7 +23,11 @@ import type {
 import { E_UNAUTHORIZED_ACCESS, WardenError } from "./errors.js";
 import type { WardenContext } from "./middleware.js";
 import { sanitizePayload } from "./sanitize.js";
-import type { SessionStore } from "./strategies/SessionStrategy.js";
+import {
+	createSessionGuardState,
+	type SessionGuardState,
+	type SessionStore,
+} from "./strategies/SessionStrategy.js";
 
 /**
  * Guard names Warden accepts for the API-key / access-tokens driver. AdonisJS
@@ -37,6 +41,64 @@ export const API_KEY_GUARD_NAMES: readonly string[] = [
 
 interface StrategyWithContext extends AuthStrategy {
 	verifyWithContext(token: string, ctx: unknown): Promise<AuthResult>;
+}
+
+/**
+ * The strategy behind a guard name, or `undefined` when nothing is registered
+ * under it.
+ *
+ * `getStrategy()` throws for an unknown name — correct when an application
+ * asks for a guard by name, wrong here: this is a capability probe across a
+ * list, and a name that resolves to nothing simply is not a session guard.
+ */
+function strategyOrUndefined(
+	auth: AuthManager,
+	name: string,
+): AuthStrategy | undefined {
+	try {
+		return auth.getStrategy(name);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * A guard that can keep a user signed in: mint a token, name its cookie, read
+ * one back, and seat the session that follows.
+ */
+interface RememberMeIssuer {
+	issueRememberMeToken(user: UserPayload): Promise<string | null>;
+	authenticateViaRememberMeToken(
+		cookieValue: unknown,
+		state?: SessionGuardState,
+	): Promise<{ user: UserPayload; cookieValue: string } | null>;
+	seatSession(user: UserPayload, session: SessionStore): void;
+	readonly rememberMeCookieName: string;
+	readonly rememberMeAgeSeconds: number;
+}
+
+/**
+ * Structural, like every other capability probe here: a guard an application
+ * wrote itself, carrying the same three members, keeps users signed in just as
+ * well as the one shipped with the package.
+ */
+function isRememberMeIssuer(
+	strategy: AuthStrategy,
+): strategy is AuthStrategy & RememberMeIssuer {
+	return (
+		typeof Reflect.get(strategy, "issueRememberMeToken") === "function" &&
+		typeof Reflect.get(strategy, "authenticateViaRememberMeToken") ===
+			"function" &&
+		typeof Reflect.get(strategy, "seatSession") === "function" &&
+		typeof Reflect.get(strategy, "rememberMeCookieName") === "string" &&
+		typeof Reflect.get(strategy, "rememberMeAgeSeconds") === "number"
+	);
+}
+
+/** Whether the guard behind `name` authenticates from the request context. */
+function isSessionGuard(auth: AuthManager, name: string): boolean {
+	const strategy = strategyOrUndefined(auth, name);
+	return strategy !== undefined && hasVerifyWithContext(strategy);
 }
 
 function hasVerifyWithContext(
@@ -115,7 +177,6 @@ export async function tryAuthenticate(
 		bearerToken: string;
 		apiKey: string;
 		session: SessionStore | undefined;
-		hasSessionStrategy: boolean;
 	},
 ): Promise<AuthAttempt> {
 	const { bearerToken, apiKey, session } = creds;
@@ -126,21 +187,22 @@ export async function tryAuthenticate(
 	for (const strategyName of strategies) {
 		try {
 			let r: AuthResult;
-			if (strategyName === "session") {
-				const strategy = auth.getStrategy(strategyName);
-				const verifyWithContext =
-					strategy && hasVerifyWithContext(strategy)
-						? strategy.verifyWithContext
-						: undefined;
-				if (verifyWithContext) {
-					attemptCount++;
-					r = await verifyWithContext.call(strategy, "", { session });
-					// The session path bypasses AuthManager.verify(), so apply the
-					// same prototype-pollution guard JWT / api-key users get there.
-					if (r.user) sanitizePayload(r.user);
-				} else {
-					continue;
-				}
+			// A session guard is one that can verify FROM THE REQUEST CONTEXT,
+			// not one registered under a particular name. `guards: { web:
+			// sessionGuard(...) }` is the documented config shape, and matching
+			// on the literal "session" sent it down the bearer-token path — so
+			// `auth.use('web').authenticate()` never read the session at all.
+			const strategy = strategyOrUndefined(auth, strategyName);
+			const verifyWithContext =
+				strategy && hasVerifyWithContext(strategy)
+					? strategy.verifyWithContext
+					: undefined;
+			if (verifyWithContext !== undefined) {
+				attemptCount++;
+				r = await verifyWithContext.call(strategy, "", { session });
+				// The session path bypasses AuthManager.verify(), so apply the
+				// same prototype-pollution guard JWT / api-key users get there.
+				if (r.user) sanitizePayload(r.user);
 			} else {
 				// Native-first credential, other transport as fallback so a
 				// single-credential client still authenticates (and an invalid
@@ -185,6 +247,12 @@ export class GuardAccessor {
 	readonly #auth: AuthManager;
 	readonly #name: string;
 	readonly #parent: Authenticator;
+	/**
+	 * The session-guard flags for THIS request. They live on the accessor —
+	 * which the Authenticator builds and caches per request — and never on the
+	 * strategy, which is built once from config and shared by every request.
+	 */
+	readonly #state: SessionGuardState = createSessionGuardState();
 
 	constructor(
 		ctx: WardenContext,
@@ -209,19 +277,172 @@ export class GuardAccessor {
 		return this.user !== undefined;
 	}
 
+	/**
+	 * Whether the user was revived from a remember-me cookie rather than
+	 * signing in.
+	 *
+	 * This is the distinction that lets an app demand the password again before
+	 * something sensitive — changing an email, spending money, deleting an
+	 * account.
+	 */
+	get viaRemember(): boolean {
+		return this.#state.viaRemember;
+	}
+
+	/** Whether a remember-me cookie was tried at all on this request. */
+	get attemptedViaRemember(): boolean {
+		return this.#state.attemptedViaRemember;
+	}
+
+	/**
+	 * Whether `logout()` has run during this request.
+	 *
+	 * A handler that logs out and then keeps working — clearing a cart, writing
+	 * an audit line — could not otherwise tell the session was already gone.
+	 */
+	get isLoggedOut(): boolean {
+		return this.#state.isLoggedOut;
+	}
+
+	/**
+	 * Revive the user from a remember-me cookie, recording on this request that
+	 * one was tried and whether it worked.
+	 *
+	 * The returned `cookieValue` must replace the one the browser holds: the
+	 * token is single-use and is recycled on every successful revival.
+	 */
+	authenticateViaRememberMeToken(
+		cookieValue: unknown,
+	): Promise<{ user: UserPayload; cookieValue: string } | null> {
+		return this.#auth.authenticateViaRememberMeToken(
+			cookieValue,
+			this.#name,
+			this.#state,
+		);
+	}
+
 	/** Authenticate the request using only this guard (throws on failure). */
 	authenticate(): Promise<void> {
 		return this.#parent.authenticateUsing([this.#name]);
 	}
 
-	/** Log a user in through this guard (session guards). */
-	login(user: UserPayload): Promise<void> {
-		return this.#auth.login(user, this.#requireSession(), this.#name);
+	/**
+	 * Revive this request from the remember-me cookie, if the browser holds one.
+	 *
+	 * The token is single-use: a success recycles the cookie and re-seats the
+	 * session, so a stolen copy stops working the moment the real user comes
+	 * back, and the rest of the request sees an ordinary signed-in user.
+	 */
+	async tryRememberMeCookie(): Promise<UserPayload | undefined> {
+		const read = this.#ctx.request.encryptedCookie;
+		const write = this.#ctx.response.encryptedCookie;
+		const session = this.#ctx.session;
+		if (!read || !write || !session) return undefined;
+
+		const strategy = strategyOrUndefined(this.#auth, this.#name);
+		if (!strategy || !isRememberMeIssuer(strategy)) return undefined;
+
+		const cookie = read.call(this.#ctx.request, strategy.rememberMeCookieName);
+		if (!cookie) return undefined;
+
+		const revived = await strategy.authenticateViaRememberMeToken(
+			cookie,
+			this.#state,
+		);
+		if (!revived) return undefined;
+
+		write.call(
+			this.#ctx.response,
+			strategy.rememberMeCookieName,
+			revived.cookieValue,
+			{ maxAge: strategy.rememberMeAgeSeconds, httpOnly: true },
+		);
+		// Seat the session WITHOUT `login()`: that method means a password was
+		// typed, and it clears `viaRemember` — the one thing this path exists to
+		// report, and what an app checks before letting someone change an email
+		// or spend money.
+		strategy.seatSession(revived.user, session);
+		return revived.user;
+	}
+
+	/**
+	 * Log a user in through this guard (session guards).
+	 *
+	 * `remember` mints a remember-me token and writes it as an ENCRYPTED,
+	 * httpOnly cookie — the cookie IS the credential, so anyone who can read it
+	 * can present it. Without `remember`, any cookie the browser still holds is
+	 * cleared: signing in without ticking the box has to REVOKE the standing
+	 * permission, not leave it in place.
+	 */
+	async login(user: UserPayload, remember = false): Promise<void> {
+		const session = this.#requireSession();
+		if (remember) await this.#issueRememberMe(user);
+		else this.#clearRememberMe();
+		try {
+			await this.#auth.login(user, session, this.#name, this.#state);
+		} catch (err) {
+			// The token was minted and the cookie sent before the session was
+			// seated — upstream's order, and it has to be, because the cookie
+			// belongs on the same response. But upstream's session write is a
+			// map assignment; here `login()` also fires listeners, any of which
+			// can throw. A failed sign-in that still handed the browser a
+			// standing credential is the one outcome worth undoing.
+			if (remember) this.#clearRememberMe();
+			throw err;
+		}
+	}
+
+	/** Mint the token and put it in the browser, or say why it cannot. */
+	async #issueRememberMe(user: UserPayload): Promise<void> {
+		const strategy = strategyOrUndefined(this.#auth, this.#name);
+		if (!strategy || !isRememberMeIssuer(strategy)) {
+			throw new WardenError(
+				"REMEMBER_ME_UNAVAILABLE",
+				`Guard '${this.#name}' cannot keep a user signed in: no remember-me tokens are configured.`,
+				{
+					hint: "Set `rememberMeTokens` on the session guard, or call login(user) without the remember flag.",
+				},
+			);
+		}
+		const value = await strategy.issueRememberMeToken(user);
+		if (value === null) {
+			throw new WardenError(
+				"REMEMBER_ME_UNAVAILABLE",
+				`Guard '${this.#name}' cannot keep a user signed in: no remember-me tokens are configured.`,
+				{
+					hint: "Set `rememberMeTokens` on the session guard, or call login(user) without the remember flag.",
+				},
+			);
+		}
+		const write = this.#ctx.response.encryptedCookie;
+		if (!write) {
+			throw new WardenError(
+				"REMEMBER_ME_UNAVAILABLE",
+				"This host cannot write an encrypted cookie, which is where the remember-me token lives.",
+				{
+					hint: "Use a host whose response exposes encryptedCookie(), or call login(user) without the remember flag.",
+				},
+			);
+		}
+		write.call(this.#ctx.response, strategy.rememberMeCookieName, value, {
+			maxAge: strategy.rememberMeAgeSeconds,
+			httpOnly: true,
+		});
+	}
+
+	/** Drop whatever remember-me cookie the browser is still holding. */
+	#clearRememberMe(): void {
+		const strategy = strategyOrUndefined(this.#auth, this.#name);
+		if (!strategy || !isRememberMeIssuer(strategy)) return;
+		this.#ctx.response.clearCookie?.call(
+			this.#ctx.response,
+			strategy.rememberMeCookieName,
+		);
 	}
 
 	/** Log the current user out of this guard (session guards). */
 	logout(): Promise<void> {
-		return this.#auth.logout(this.#requireSession(), this.#name);
+		return this.#auth.logout(this.#requireSession(), this.#name, this.#state);
 	}
 
 	#requireSession(): SessionStore {
@@ -355,12 +576,29 @@ export class Authenticator {
 			{ guardName },
 		);
 		const creds = extractCredentials(this.#ctx, this.#auth);
-		const hasSessionStrategy = names.includes("session");
-		const { result, viaGuard, attemptCount, crashCount } =
-			await tryAuthenticate(this.#auth, names, {
-				...creds,
-				hasSessionStrategy,
-			});
+		// Same rule as the loop above: a session guard is one that verifies from
+		// the request context. Matching the literal name meant a guard called
+		// `web` never got the login redirect a browser needs.
+		const hasSessionStrategy = names.some((name) =>
+			isSessionGuard(this.#auth, name),
+		);
+		const attempt = await tryAuthenticate(this.#auth, names, creds);
+		const { attemptCount, crashCount } = attempt;
+		let result = attempt.result;
+		let viaGuard = attempt.viaGuard;
+
+		// No credential answered, but the browser may still hold a remember-me
+		// cookie — that is what "keep me signed in" means, and nothing read it.
+		if (!result?.authenticated && hasSessionStrategy) {
+			for (const name of names) {
+				const user = await this.use(name).tryRememberMeCookie();
+				if (user) {
+					result = { authenticated: true, user };
+					viaGuard = name;
+					break;
+				}
+			}
+		}
 
 		if (result?.authenticated && result.user) {
 			this.#user = result.user;

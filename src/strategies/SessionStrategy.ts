@@ -65,13 +65,41 @@ export interface SessionStrategyConfig {
 /** Two years, Adonis' `rememberMeTokensAge` default. */
 const DEFAULT_REMEMBER_AGE_SECONDS = 63_072_000;
 
+/**
+ * The flags a session guard reports about THE CURRENT REQUEST — whether the
+ * user was revived from a remember-me cookie, whether one was even tried, and
+ * whether `logout()` has run.
+ *
+ * They live here, in a per-request object, and NOT on the strategy: a strategy
+ * is built once from config and shared by every request the app serves, so a
+ * flag stored on it would answer the next request with the previous one's
+ * truth — a session restored from a cookie would keep looking like one long
+ * after, and a logout would make every later request read as logged out.
+ * Upstream avoids this by building a fresh guard per request; the strategy is
+ * shared here, so the state is what moves.
+ */
+export interface SessionGuardState {
+	/** The user was revived from a remember-me cookie rather than signing in. */
+	viaRemember: boolean;
+	/** A remember-me cookie was tried at all — whether or not it worked. */
+	attemptedViaRemember: boolean;
+	/** `logout()` has run during this request. */
+	isLoggedOut: boolean;
+}
+
+/** A fresh set of per-request flags, all false. */
+export function createSessionGuardState(): SessionGuardState {
+	return {
+		viaRemember: false,
+		attemptedViaRemember: false,
+		isLoggedOut: false,
+	};
+}
+
 export class SessionStrategy implements AuthStrategy {
 	name = "session";
 	#config: SessionStrategyConfig;
 	#sessionKey: string;
-	#viaRemember = false;
-	#loggedOut = false;
-	#attemptedViaRemember = false;
 
 	constructor(config: SessionStrategyConfig) {
 		this.#config = config;
@@ -88,37 +116,6 @@ export class SessionStrategy implements AuthStrategy {
 		return this.#config.rememberMeTokens !== undefined;
 	}
 
-	/**
-	 * Whether the current user was revived from a remember-me cookie rather
-	 * than signing in (AdonisJS `viaRemember`).
-	 *
-	 * This is the distinction that lets an app demand the password again before
-	 * something sensitive — changing an email, spending money, deleting an
-	 * account. Nothing reported it, so a session restored from a cookie looked
-	 * exactly like one where the user had just typed their password.
-	 */
-	get viaRemember(): boolean {
-		return this.#viaRemember;
-	}
-
-	/**
-	 * Whether a remember-me token was even tried on this request (AdonisJS
-	 * `attemptedViaRemember`) — true whether or not it worked.
-	 */
-	get attemptedViaRemember(): boolean {
-		return this.#attemptedViaRemember;
-	}
-
-	/**
-	 * Whether `logout()` ran on this guard (AdonisJS `isLoggedOut`).
-	 *
-	 * A handler that logs out and then keeps working — clearing a cart, writing
-	 * an audit line — could not tell that the session was already gone.
-	 */
-	get isLoggedOut(): boolean {
-		return this.#loggedOut;
-	}
-
 	/** The session key the user id is stored under (AdonisJS `sessionKeyName`). */
 	get sessionKeyName(): string {
 		return this.#sessionKey;
@@ -130,6 +127,11 @@ export class SessionStrategy implements AuthStrategy {
 	}
 
 	#rememberMeAge(): number {
+		return this.rememberMeAgeSeconds;
+	}
+
+	/** How long a remember-me token lives, in SECONDS (the cookie's max-age). */
+	get rememberMeAgeSeconds(): number {
 		return this.#config.rememberMeAge ?? DEFAULT_REMEMBER_AGE_SECONDS;
 	}
 
@@ -155,10 +157,11 @@ export class SessionStrategy implements AuthStrategy {
 	 */
 	async authenticateViaRememberMeToken(
 		cookieValue: unknown,
+		state?: SessionGuardState,
 	): Promise<{ user: UserPayload; cookieValue: string } | null> {
 		const driver = this.#config.rememberMeTokens;
 		if (!driver) return null;
-		this.#attemptedViaRemember = true;
+		if (state) state.attemptedViaRemember = true;
 
 		const recycled = await verifyAndRecycleRememberMeToken(
 			driver,
@@ -170,7 +173,7 @@ export class SessionStrategy implements AuthStrategy {
 		const user = await this.#config.findUser(recycled.userId);
 		if (!user) return null;
 
-		this.#viaRemember = true;
+		if (state) state.viaRemember = true;
 		return { user, cookieValue: recycled.value };
 	}
 
@@ -240,14 +243,33 @@ export class SessionStrategy implements AuthStrategy {
 	 * migration is handled by Ream's `SessionMiddleware` on the response
 	 * path — see `wasRegenerated()` there.
 	 */
-	async login(user: UserPayload, session: SessionStore): Promise<void> {
+	/**
+	 * Seat a user in the session, without deciding HOW they got there.
+	 *
+	 * Split out from {@link login} because the remember-me path needs the seat
+	 * but not the flags: `login()` means a password was typed, and resetting
+	 * `viaRemember` there would erase the very fact a cookie-revived session
+	 * exists to report.
+	 */
+	seatSession(user: UserPayload, session: SessionStore): void {
 		session.regenerate();
 		session.put(this.#sessionKey, user.id);
-		this.#loggedOut = false;
-		// A password was typed: this session is no longer "via remember", even
-		// if a cookie was tried earlier in the same request. Without the reset
-		// the flag would stay true and a re-auth prompt would never fire.
-		this.#viaRemember = false;
+	}
+
+	async login(
+		user: UserPayload,
+		session: SessionStore,
+		state?: SessionGuardState,
+	): Promise<void> {
+		this.seatSession(user, session);
+		if (state) {
+			state.isLoggedOut = false;
+			// A password was typed: this session is no longer "via remember",
+			// even if a cookie was tried earlier in the same request. Without
+			// the reset the flag would stay true and a re-auth prompt would
+			// never fire.
+			state.viaRemember = false;
+		}
 	}
 
 	/**
@@ -267,10 +289,15 @@ export class SessionStrategy implements AuthStrategy {
 	 * The remember-me token is revoked separately through
 	 * {@link revokeRememberMeToken}, because only the caller holds the cookie.
 	 */
-	async logout(session: SessionStore): Promise<void> {
+	async logout(
+		session: SessionStore,
+		state?: SessionGuardState,
+	): Promise<void> {
 		session.forget(this.#sessionKey);
-		this.#viaRemember = false;
-		this.#attemptedViaRemember = false;
-		this.#loggedOut = true;
+		if (state) {
+			state.viaRemember = false;
+			state.attemptedViaRemember = false;
+			state.isLoggedOut = true;
+		}
 	}
 }

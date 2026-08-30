@@ -17,6 +17,7 @@ import {
 	type WardenContext,
 	wardenMiddleware,
 } from "../../src/middleware.js";
+import { MemoryRememberMeTokenDriver } from "../../src/RememberMeToken.js";
 import {
 	type SessionStore,
 	SessionStrategy,
@@ -464,5 +465,279 @@ describe("warden > AuthManager factories (AdonisJS parity)", () => {
 		expect(() => manager.createAuthenticatorClient().use("jwt")).toThrow(
 			/authenticateAsClient/,
 		);
+	});
+});
+
+describe("warden > a guard is recognised by what it does, not by its name", () => {
+	/** The documented config shape: `guards: { web: sessionGuard(...) }`. */
+	function namedSessionManager(guardName: string, user: UserPayload | null) {
+		const session: AuthStrategy & {
+			verifyWithContext(t: string, c: unknown): Promise<AuthResult>;
+		} = {
+			name: "session",
+			async authenticate() {
+				return { authenticated: false };
+			},
+			async verify() {
+				return { authenticated: false };
+			},
+			async verifyWithContext() {
+				return user
+					? { authenticated: true, user }
+					: { authenticated: false, error: "no session user" };
+			},
+		};
+		return new AuthManager({
+			default: guardName,
+			guards: { [guardName]: session },
+		});
+	}
+
+	it("authenticates through a guard called `web`", async () => {
+		const manager = namedSessionManager("web", okUser);
+		const { ctx } = buildCtx({ manager, session: fakeSession() });
+		const auth = new Authenticator(ctx, manager);
+
+		await auth.authenticate();
+
+		// Matching the literal name "session" sent this down the bearer-token
+		// path, which found no token and refused a perfectly valid session.
+		expect(auth.isAuthenticated).toBe(true);
+		expect(auth.user?.id).toBe("u1");
+		expect(auth.authenticatedViaGuard).toBe("web");
+	});
+
+	it("still authenticates through one called `session`", async () => {
+		const manager = namedSessionManager("session", okUser);
+		const { ctx } = buildCtx({ manager, session: fakeSession() });
+		const auth = new Authenticator(ctx, manager);
+
+		await auth.authenticate();
+
+		expect(auth.isAuthenticated).toBe(true);
+	});
+
+	it("redirects a browser to the login route for a guard called `web`", async () => {
+		class WebCtl {
+			@Guard("web")
+			async handler() {}
+		}
+		const manager = namedSessionManager("web", null);
+		const { ctx, response } = buildCtx({
+			manager,
+			controller: WebCtl.prototype,
+			action: "handler",
+			session: fakeSession(),
+			loginRoute: "/login",
+			headers: { accept: "text/html" },
+		});
+
+		await wardenMiddleware(ctx, async () => {});
+
+		// A browser handed a 401 JSON body instead of the login page is the
+		// same bug seen from the other end.
+		expect(response.redirectedTo).toBe("/login");
+		expect(response.status).toBeUndefined();
+	});
+});
+
+describe("warden > keep me signed in, end to end", () => {
+	/** A host that carries encrypted cookies, like Ream's. */
+	function cookieJar() {
+		const jar: Record<string, string> = {};
+		return {
+			jar,
+			read: (name: string) => jar[name] ?? null,
+			write: (
+				name: string,
+				value: string,
+				options?: Record<string, unknown>,
+			) => {
+				jar[name] = value;
+				jar[`${name}::options`] = JSON.stringify(options ?? {});
+			},
+			clear: (name: string) => {
+				delete jar[name];
+			},
+		};
+	}
+
+	function guardWithTokens(users: Record<string, UserPayload>) {
+		const strategy = new SessionStrategy({
+			findUser: async (id) => users[String(id)] ?? null,
+			rememberMeTokens: new MemoryRememberMeTokenDriver(),
+			rememberMeAge: 3600,
+		});
+		return new AuthManager({ default: "web", guards: { web: strategy } });
+	}
+
+	function ctxWith(
+		manager: AuthManager,
+		cookies: ReturnType<typeof cookieJar>,
+		session: SessionStore,
+	): WardenContext {
+		const bindings = new Map<unknown, unknown>();
+		bindings.set(AuthManager, manager);
+		return {
+			request: { headers: () => ({}), encryptedCookie: cookies.read },
+			response: {
+				status: () => undefined,
+				json: () => undefined,
+				encryptedCookie: cookies.write,
+				clearCookie: cookies.clear,
+			},
+			session,
+			containerResolver: { make: async (t: unknown) => bindings.get(t) },
+		} as unknown as WardenContext;
+	}
+
+	it("writes an httpOnly encrypted cookie when the box is ticked", async () => {
+		const manager = guardWithTokens({ u1: okUser });
+		const cookies = cookieJar();
+		const ctx = ctxWith(manager, cookies, fakeSession());
+
+		await new Authenticator(ctx, manager).use("web").login(okUser, true);
+
+		// The cookie IS the credential — anyone who reads it can present it.
+		expect(cookies.jar.remember_web).toBeTruthy();
+		expect(JSON.parse(cookies.jar["remember_web::options"])).toMatchObject({
+			httpOnly: true,
+			maxAge: 3600,
+		});
+	});
+
+	it("clears a standing cookie when the box is NOT ticked", async () => {
+		const manager = guardWithTokens({ u1: okUser });
+		const cookies = cookieJar();
+		cookies.jar.remember_web = "left-over-from-last-time";
+		const ctx = ctxWith(manager, cookies, fakeSession());
+
+		await new Authenticator(ctx, manager).use("web").login(okUser);
+
+		// Signing in without ticking has to REVOKE the standing permission.
+		expect(cookies.jar.remember_web).toBeUndefined();
+	});
+
+	it("revives a returning visitor from the cookie alone", async () => {
+		const manager = guardWithTokens({ u1: okUser });
+		const cookies = cookieJar();
+		await new Authenticator(ctxWith(manager, cookies, fakeSession()), manager)
+			.use("web")
+			.login(okUser, true);
+
+		// A NEW request: fresh session, same browser.
+		const next = new Authenticator(
+			ctxWith(manager, cookies, fakeSession()),
+			manager,
+		);
+		await next.authenticate();
+
+		expect(next.isAuthenticated).toBe(true);
+		expect(next.user?.id).toBe("u1");
+		expect(next.use("web").viaRemember).toBe(true);
+	});
+
+	it("recycles the cookie, so a stolen copy stops working", async () => {
+		const manager = guardWithTokens({ u1: okUser });
+		const cookies = cookieJar();
+		await new Authenticator(ctxWith(manager, cookies, fakeSession()), manager)
+			.use("web")
+			.login(okUser, true);
+		const stolen = cookies.jar.remember_web;
+
+		await new Authenticator(
+			ctxWith(manager, cookies, fakeSession()),
+			manager,
+		).authenticate();
+		expect(cookies.jar.remember_web).not.toBe(stolen);
+
+		// The thief presents the old value against a fresh session.
+		const thief = cookieJar();
+		thief.jar.remember_web = stolen;
+		const attacker = new Authenticator(
+			ctxWith(manager, thief, fakeSession()),
+			manager,
+		);
+		await attacker.authenticate().catch(() => undefined);
+
+		expect(attacker.isAuthenticated).toBe(false);
+	});
+
+	it("re-seats the session, so the next request needs no cookie", async () => {
+		const manager = guardWithTokens({ u1: okUser });
+		const cookies = cookieJar();
+		await new Authenticator(ctxWith(manager, cookies, fakeSession()), manager)
+			.use("web")
+			.login(okUser, true);
+
+		const session = fakeSession();
+		await new Authenticator(
+			ctxWith(manager, cookies, session),
+			manager,
+		).authenticate();
+
+		expect(session.get("auth_user_id")).toBe("u1");
+	});
+
+	it("says so when the guard has no remember-me configured", async () => {
+		const strategy = new SessionStrategy({ findUser: async () => okUser });
+		const manager = new AuthManager({
+			default: "web",
+			guards: { web: strategy },
+		});
+		const ctx = ctxWith(manager, cookieJar(), fakeSession());
+
+		// Silently ignoring the flag hands the user a box that does nothing.
+		await expect(
+			new Authenticator(ctx, manager).use("web").login(okUser, true),
+		).rejects.toThrow(/cannot keep a user signed in/);
+	});
+});
+
+describe("warden > a failed sign-in leaves no standing credential", () => {
+	it("clears the remember-me cookie when the session write throws", async () => {
+		const jar: Record<string, string> = {};
+		const strategy = new SessionStrategy({
+			findUser: async () => okUser,
+			rememberMeTokens: new MemoryRememberMeTokenDriver(),
+			rememberMeAge: 3600,
+		});
+		const manager = new AuthManager({
+			default: "web",
+			guards: { web: strategy },
+		});
+		const ctx = {
+			request: {
+				headers: () => ({}),
+				encryptedCookie: (n: string) => jar[n] ?? null,
+			},
+			response: {
+				status: () => undefined,
+				json: () => undefined,
+				encryptedCookie: (n: string, v: string) => {
+					jar[n] = v;
+				},
+				clearCookie: (n: string) => {
+					delete jar[n];
+				},
+			},
+			// A session whose write blows up — a listener, a store, a driver.
+			session: {
+				get: () => undefined,
+				put: () => {
+					throw new Error("session store is down");
+				},
+				forget: () => undefined,
+				regenerate: () => undefined,
+			},
+		} as unknown as WardenContext;
+
+		await expect(
+			new Authenticator(ctx, manager).use("web").login(okUser, true),
+		).rejects.toThrow(/session store is down/);
+
+		// A sign-in that failed must not leave the browser holding a credential
+		// that signs it in on the next request.
+		expect(jar.remember_web).toBeUndefined();
 	});
 });

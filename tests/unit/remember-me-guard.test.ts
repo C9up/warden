@@ -11,7 +11,10 @@ import {
 	decodeTokenValue,
 	MemoryRememberMeTokenDriver,
 } from "../../src/RememberMeToken.js";
-import { SessionStrategy } from "../../src/strategies/SessionStrategy.js";
+import {
+	createSessionGuardState,
+	SessionStrategy,
+} from "../../src/strategies/SessionStrategy.js";
 
 function guard(options: { userExists?: boolean } = {}) {
 	const tokens = new MemoryRememberMeTokenDriver();
@@ -113,57 +116,97 @@ describe("warden > remember-me on the session guard", () => {
 	});
 });
 
-describe("warden > the guard says HOW the user got here (AdonisJS viaRemember)", () => {
+describe("warden > the guard says HOW the user got here (viaRemember)", () => {
 	it("is false for a fresh login", async () => {
 		const { strategy } = guard();
-		await strategy.login({ id: "1" }, session() as never);
+		const state = createSessionGuardState();
+		await strategy.login({ id: "1" }, session() as never, state);
 
-		expect(strategy.viaRemember).toBe(false);
-		expect(strategy.attemptedViaRemember).toBe(false);
+		expect(state.viaRemember).toBe(false);
+		expect(state.attemptedViaRemember).toBe(false);
 	});
 
 	it("is true once a user is revived from the cookie", async () => {
 		const { strategy } = guard();
+		const state = createSessionGuardState();
 		const value = await strategy.issueRememberMeToken({ id: "1" });
 
-		const revived = await strategy.authenticateViaRememberMeToken(value);
+		const revived = await strategy.authenticateViaRememberMeToken(value, state);
 
 		// This is the distinction that lets an app demand the password again
 		// before something sensitive. Nothing reported it, so a session
 		// restored from a cookie looked exactly like a fresh sign-in.
 		expect(revived).not.toBe(null);
-		expect(strategy.viaRemember).toBe(true);
-		expect(strategy.attemptedViaRemember).toBe(true);
+		expect(state.viaRemember).toBe(true);
+		expect(state.attemptedViaRemember).toBe(true);
 	});
 
 	it("records the attempt even when the cookie is rejected", async () => {
 		const { strategy } = guard();
+		const state = createSessionGuardState();
 
-		expect(await strategy.authenticateViaRememberMeToken("garbage")).toBe(null);
-		expect(strategy.attemptedViaRemember).toBe(true);
-		expect(strategy.viaRemember).toBe(false);
+		expect(
+			await strategy.authenticateViaRememberMeToken("garbage", state),
+		).toBe(null);
+		expect(state.attemptedViaRemember).toBe(true);
+		expect(state.viaRemember).toBe(false);
 	});
 
 	it("a real login afterwards clears it", async () => {
 		const { strategy } = guard();
+		const state = createSessionGuardState();
 		const value = await strategy.issueRememberMeToken({ id: "1" });
-		await strategy.authenticateViaRememberMeToken(value);
-		expect(strategy.viaRemember).toBe(true);
+		await strategy.authenticateViaRememberMeToken(value, state);
+		expect(state.viaRemember).toBe(true);
 
 		// A password was typed: a re-auth prompt must not keep firing.
-		await strategy.login({ id: "1" }, session() as never);
-		expect(strategy.viaRemember).toBe(false);
+		await strategy.login({ id: "1" }, session() as never, state);
+		expect(state.viaRemember).toBe(false);
 	});
 
 	it("logout clears both", async () => {
 		const { strategy } = guard();
+		const state = createSessionGuardState();
 		const value = await strategy.issueRememberMeToken({ id: "1" });
-		await strategy.authenticateViaRememberMeToken(value);
+		await strategy.authenticateViaRememberMeToken(value, state);
 
-		await strategy.logout(session() as never);
+		await strategy.logout(session() as never, state);
 
-		expect(strategy.viaRemember).toBe(false);
-		expect(strategy.attemptedViaRemember).toBe(false);
+		expect(state.viaRemember).toBe(false);
+		expect(state.attemptedViaRemember).toBe(false);
+	});
+
+	it("never records anything on the shared strategy", async () => {
+		// The strategy is built once from config and serves every request. A
+		// flag stored on it would answer the NEXT request with this one's
+		// truth — a cookie-revived session would keep looking cookie-revived
+		// long after, for whoever came next.
+		const { strategy } = guard();
+		const value = await strategy.issueRememberMeToken({ id: "1" });
+		await strategy.authenticateViaRememberMeToken(
+			value,
+			createSessionGuardState(),
+		);
+
+		const next = createSessionGuardState();
+		expect(next.viaRemember).toBe(false);
+		expect(next.attemptedViaRemember).toBe(false);
+		expect(next.isLoggedOut).toBe(false);
+	});
+
+	it("keeps two concurrent requests apart", async () => {
+		const { strategy } = guard();
+		const first = createSessionGuardState();
+		const second = createSessionGuardState();
+		const value = await strategy.issueRememberMeToken({ id: "1" });
+
+		await strategy.authenticateViaRememberMeToken(value, first);
+		await strategy.logout(session() as never, second);
+
+		expect(first.viaRemember).toBe(true);
+		expect(first.isLoggedOut).toBe(false);
+		expect(second.viaRemember).toBe(false);
+		expect(second.isLoggedOut).toBe(true);
 	});
 
 	it("exposes the session and cookie key names", () => {
@@ -173,22 +216,24 @@ describe("warden > the guard says HOW the user got here (AdonisJS viaRemember)",
 	});
 });
 
-describe("warden > isLoggedOut (AdonisJS parity)", () => {
-	it("reports that logout() ran on this guard", async () => {
+describe("warden > isLoggedOut", () => {
+	it("reports that logout() ran on this request", async () => {
 		const { strategy } = guard();
-		expect(strategy.isLoggedOut).toBe(false);
+		const state = createSessionGuardState();
+		expect(state.isLoggedOut).toBe(false);
 
 		// A handler that logs out and keeps working — clearing a cart, writing
 		// an audit line — could not tell the session was already gone.
-		await strategy.logout(session() as never);
-		expect(strategy.isLoggedOut).toBe(true);
+		await strategy.logout(session() as never, state);
+		expect(state.isLoggedOut).toBe(true);
 	});
 
 	it("a later login clears it", async () => {
 		const { strategy } = guard();
-		await strategy.logout(session() as never);
+		const state = createSessionGuardState();
+		await strategy.logout(session() as never, state);
 
-		await strategy.login({ id: "1" }, session() as never);
-		expect(strategy.isLoggedOut).toBe(false);
+		await strategy.login({ id: "1" }, session() as never, state);
+		expect(state.isLoggedOut).toBe(false);
 	});
 });
