@@ -70,6 +70,7 @@ export { GoogleDriver } from "./firstcontact/drivers/GoogleDriver.js";
 export { LinkedInDriver } from "./firstcontact/drivers/LinkedInDriver.js";
 export { LinkedInOpenidConnectDriver } from "./firstcontact/drivers/LinkedInOpenidConnectDriver.js";
 export { SpotifyDriver } from "./firstcontact/drivers/SpotifyDriver.js";
+export { TwitterDriver } from "./firstcontact/drivers/TwitterDriver.js";
 export { TwitterXDriver } from "./firstcontact/drivers/TwitterXDriver.js";
 export { FirstContactManager } from "./firstcontact/FirstContactManager.js";
 export {
@@ -82,6 +83,7 @@ export type {
 	OAuthConfig,
 	OAuthToken,
 	OAuthUser,
+	RedirectRequest,
 } from "./firstcontact/types.js";
 export { assertOAuthState } from "./firstcontact/types.js";
 export {

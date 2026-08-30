@@ -110,7 +110,9 @@ describe("warden > social drivers > PKCE", () => {
 
 	it("challenges with the S256 hash of the verifier, never the verifier", () => {
 		const verifier = createCodeVerifier();
-		const url = new URL(new TwitterXDriver(config).redirectUrl("st8", verifier));
+		const url = new URL(
+			new TwitterXDriver(config).redirectUrl("st8", verifier),
+		);
 
 		expect(url.searchParams.get("code_challenge_method")).toBe("S256");
 		const challenge = url.searchParams.get("code_challenge");
@@ -476,5 +478,34 @@ describe("warden > socials", () => {
 		);
 		expect(socials.spotify(config)()).toBeInstanceOf(SpotifyDriver);
 		expect(socials.twitterX(config)()).toBeInstanceOf(TwitterXDriver);
+	});
+});
+
+describe("warden > social drivers > begin()", () => {
+	it("mints the state so the caller does not have to", async () => {
+		const started = await new DiscordDriver(config).begin();
+
+		expect(started.state).toMatch(/^[0-9a-f-]{36}$/);
+		expect(new URL(started.url).searchParams.get("state")).toBe(started.state);
+		// Nothing to keep beyond the state for a plain OAuth2 provider.
+		expect(started.secret).toBeUndefined();
+	});
+
+	it("takes a state the caller chose", async () => {
+		const started = await new DiscordDriver(config).begin("mine");
+
+		expect(started.state).toBe("mine");
+	});
+
+	it("mints the PKCE verifier for the providers that need one", async () => {
+		const started = await new TwitterXDriver(config).begin();
+
+		// The caller never has to know X mandates PKCE.
+		expect(started.secret).toBeDefined();
+		expect(new URL(started.url).searchParams.get("code_challenge_method")).toBe(
+			"S256",
+		);
+		// The verifier is kept, never sent in the URL.
+		expect(started.url).not.toContain(String(started.secret));
 	});
 });

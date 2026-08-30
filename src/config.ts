@@ -25,6 +25,7 @@ import { GoogleDriver } from "./firstcontact/drivers/GoogleDriver.js";
 import { LinkedInDriver } from "./firstcontact/drivers/LinkedInDriver.js";
 import { LinkedInOpenidConnectDriver } from "./firstcontact/drivers/LinkedInOpenidConnectDriver.js";
 import { SpotifyDriver } from "./firstcontact/drivers/SpotifyDriver.js";
+import { TwitterDriver } from "./firstcontact/drivers/TwitterDriver.js";
 import { TwitterXDriver } from "./firstcontact/drivers/TwitterXDriver.js";
 import type { FirstContactDriver, OAuthConfig } from "./firstcontact/types.js";
 import type { MfaManager } from "./mfa/MfaManager.js";
@@ -138,12 +139,14 @@ export const socials = {
 		return () => new SpotifyDriver(config);
 	},
 	/**
-	 * X through OAuth2. It requires PKCE — see `createCodeVerifier()`.
-	 *
-	 * There is no `twitter` helper: that name belongs to the OAuth1 flow, which
-	 * is a different protocol, so a config naming it fails to COMPILE instead of
-	 * quietly signing users in through another one.
+	 * X through OAuth1 — the older flow, and the one whose profile call returns
+	 * the address. Its redirect needs a request token from X, so it is reached
+	 * through `begin()` rather than `redirect()`.
 	 */
+	twitter(config: OAuthConfig): SocialDriverFactory {
+		return () => new TwitterDriver(config);
+	},
+	/** X through OAuth2. It requires PKCE, which `begin()` handles. */
 	twitterX(config: OAuthConfig): SocialDriverFactory {
 		return () => new TwitterXDriver(config);
 	},

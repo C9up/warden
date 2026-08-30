@@ -13,12 +13,13 @@
  * lets one driver serve several concurrent sign-ins.
  */
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type {
 	FirstContactDriver,
 	OAuthConfig,
 	OAuthToken,
 	OAuthUser,
+	RedirectRequest,
 } from "./types.js";
 import { assertOAuthState } from "./types.js";
 
@@ -82,7 +83,7 @@ export abstract class Oauth2Driver implements FirstContactDriver {
 		return [...(this.config.scopes ?? this.defaultScopes)];
 	}
 
-	redirectUrl(state?: string, codeVerifier?: string): string {
+	redirectUrl(state?: string, secret?: string): string {
 		const params = new URLSearchParams({
 			client_id: this.config.clientId,
 			redirect_uri: this.config.callbackUrl,
@@ -94,31 +95,43 @@ export abstract class Oauth2Driver implements FirstContactDriver {
 		});
 
 		if (this.requiresPkce) {
-			if (!codeVerifier) {
+			if (!secret) {
 				throw new Error(
 					`[warden] ${this.provider} requires PKCE: pass the code verifier from createCodeVerifier() to redirectUrl(), store it with the state, and hand it back to callback().`,
 				);
 			}
-			params.set("code_challenge", challengeFor(codeVerifier));
+			params.set("code_challenge", challengeFor(secret));
 			params.set("code_challenge_method", "S256");
 		}
 
 		return `${this.authorizeUrl}?${params}`;
 	}
 
+	/**
+	 * Where to send the user, plus what has to be kept until they come back.
+	 * The state is minted here when the caller has no reason to choose one,
+	 * and a provider requiring PKCE gets its verifier without the caller
+	 * having to know it needed one.
+	 */
+	async begin(state: string = randomUUID()): Promise<RedirectRequest> {
+		if (!this.requiresPkce) return { url: this.redirectUrl(state), state };
+		const secret = createCodeVerifier();
+		return { url: this.redirectUrl(state, secret), state, secret };
+	}
+
 	async callback(
 		code: string,
 		state?: string,
 		expectedState?: string,
-		codeVerifier?: string,
+		secret?: string,
 	): Promise<{ user: OAuthUser; token: OAuthToken }> {
 		assertOAuthState(state, expectedState);
-		if (this.requiresPkce && !codeVerifier) {
+		if (this.requiresPkce && !secret) {
 			throw new Error(
 				`[warden] ${this.provider} requires PKCE: pass back the code verifier you stored at redirect time.`,
 			);
 		}
-		const tokens = await this.exchange(code, codeVerifier);
+		const tokens = await this.exchange(code, secret);
 		const accessToken = String(tokens.access_token);
 		const user = await this.fetchUser(accessToken);
 		return { user, token: readToken(tokens, accessToken) };
@@ -135,13 +148,13 @@ export abstract class Oauth2Driver implements FirstContactDriver {
 	/** Trade the authorization code for an access token. */
 	protected async exchange(
 		code: string,
-		codeVerifier?: string,
+		secret?: string,
 	): Promise<TokenResponse> {
 		const body = new URLSearchParams({
 			code,
 			redirect_uri: this.config.callbackUrl,
 			grant_type: "authorization_code",
-			...(codeVerifier ? { code_verifier: codeVerifier } : {}),
+			...(secret ? { code_verifier: secret } : {}),
 		});
 		const headers: Record<string, string> = {
 			Accept: "application/json",
@@ -231,8 +244,8 @@ export abstract class Oauth2Driver implements FirstContactDriver {
 }
 
 /** The S256 challenge a provider compares the verifier against. */
-function challengeFor(codeVerifier: string): string {
-	return createHash("sha256").update(codeVerifier).digest("base64url");
+function challengeFor(secret: string): string {
+	return createHash("sha256").update(secret).digest("base64url");
 }
 
 /** Narrow a provider's token payload to the fields Warden promises. */

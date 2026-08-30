@@ -1,12 +1,17 @@
 /**
- * FirstContactManager — OAuth2 social authentication.
+ * FirstContactManager — social sign-in, keyed by the names a config chose.
  *
  * Usage:
- *   firstContact.use('google').redirectUrl()
- *   firstContact.use('google').callback(code)
+ *   const { url, state, secret } = await socials.begin('google')
+ *   const { user } = await socials.callback('google', code, state, expected, secret)
  */
 
-import type { FirstContactDriver, OAuthToken, OAuthUser } from "./types.js";
+import type {
+	FirstContactDriver,
+	OAuthToken,
+	OAuthUser,
+	RedirectRequest,
+} from "./types.js";
 
 export class FirstContactManager {
 	#drivers: Map<string, FirstContactDriver> = new Map();
@@ -25,12 +30,31 @@ export class FirstContactManager {
 	}
 
 	/**
-	 * Where to send the user. `codeVerifier` is only read by providers that
-	 * require PKCE — mint one with `createCodeVerifier()` and store it beside
-	 * the state.
+	 * Where to send the user, plus what to keep until they come back.
+	 *
+	 * This is the path that works for every provider: it mints the state,
+	 * fetches a request token where the protocol needs one, and returns the
+	 * secret to store when there is one.
 	 */
-	redirect(name: string, state?: string, codeVerifier?: string): string {
-		return this.use(name).redirectUrl(state, codeVerifier);
+	async begin(name: string, state?: string): Promise<RedirectRequest> {
+		const driver = this.use(name);
+		if (typeof driver.begin !== "function") {
+			throw new Error(
+				`[warden] The '${name}' driver does not support begin(); use redirect().`,
+			);
+		}
+		return driver.begin(state);
+	}
+
+	/**
+	 * Where to send the user, when the provider can say so offline. `secret`
+	 * is only read by providers that require PKCE — mint one with
+	 * `createCodeVerifier()` and store it beside the state.
+	 *
+	 * An OAuth1 provider cannot answer here; call {@link begin} instead.
+	 */
+	redirect(name: string, state?: string, secret?: string): string {
+		return this.use(name).redirectUrl(state, secret);
 	}
 
 	/**
@@ -43,7 +67,7 @@ export class FirstContactManager {
 		code: string,
 		state?: string,
 		expectedState?: string,
-		codeVerifier?: string,
+		secret?: string,
 	): Promise<{ user: OAuthUser; token: OAuthToken }> {
 		if (!expectedState) {
 			throw new Error(
@@ -51,7 +75,7 @@ export class FirstContactManager {
 					`Store the state from redirect() in the session and pass it here.`,
 			);
 		}
-		return this.use(name).callback(code, state, expectedState, codeVerifier);
+		return this.use(name).callback(code, state, expectedState, secret);
 	}
 
 	/**
@@ -59,14 +83,18 @@ export class FirstContactManager {
 	 * Throws when that driver has no way to — rather than answering with a
 	 * profile it did not fetch.
 	 */
-	async userFromToken(name: string, accessToken: string): Promise<OAuthUser> {
+	async userFromToken(
+		name: string,
+		accessToken: string,
+		tokenSecret?: string,
+	): Promise<OAuthUser> {
 		const driver = this.use(name);
 		if (typeof driver.userFromToken !== "function") {
 			throw new Error(
 				`[warden] The '${name}' driver cannot read a profile from an existing token.`,
 			);
 		}
-		return driver.userFromToken(accessToken);
+		return driver.userFromToken(accessToken, tokenSecret);
 	}
 
 	get registeredDrivers(): string[] {

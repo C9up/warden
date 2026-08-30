@@ -43,33 +43,62 @@ export interface OAuthToken {
 	accessToken: string;
 	refreshToken?: string;
 	expiresIn?: number;
+	/**
+	 * OAuth1 only: the secret every later call has to be signed with. An
+	 * OAuth1 access token is useless without it.
+	 */
+	tokenSecret?: string;
+}
+
+/**
+ * What a redirect needs the caller to keep until the user comes back.
+ *
+ * `state` is what the callback's own `state` must match. `secret` is present
+ * for the providers that mint one at redirect time — a PKCE verifier, or an
+ * OAuth1 request-token secret — and must be handed back to `callback()`.
+ * Store both where you store a session, and pull them once.
+ */
+export interface RedirectRequest {
+	url: string;
+	state: string;
+	secret?: string;
 }
 
 export interface FirstContactDriver {
 	/**
-	 * Where to send the user. `codeVerifier` is only read by providers that
-	 * require PKCE, and those refuse to build a URL without it.
+	 * Where to send the user. `secret` is only read by providers that require
+	 * PKCE, and those refuse to build a URL without it.
+	 *
+	 * A provider whose redirect needs a round trip of its own — OAuth1 — cannot
+	 * answer here at all and throws; use {@link FirstContactDriver.begin}.
 	 */
-	redirectUrl(state?: string, codeVerifier?: string): string;
+	redirectUrl(state?: string, secret?: string): string;
+	/**
+	 * Where to send the user, plus whatever has to be kept until they come
+	 * back. Works for every provider, including the ones `redirectUrl` cannot
+	 * serve, so it is the path to reach for.
+	 */
+	begin?(state?: string): Promise<RedirectRequest>;
 	/**
 	 * Handle the OAuth callback. `state` MUST be validated against the value
 	 * originally passed to `redirectUrl()` to prevent CSRF login attacks.
 	 * Throws if state is missing or mismatched.
 	 *
-	 * `codeVerifier` is the value stored alongside the state at redirect time,
-	 * for the providers that require PKCE.
+	 * `secret` is the value stored alongside the state at redirect time — a
+	 * PKCE verifier, or an OAuth1 request-token secret.
 	 */
 	callback(
 		code: string,
 		state?: string,
 		expectedState?: string,
-		codeVerifier?: string,
+		secret?: string,
 	): Promise<{ user: OAuthUser; token: OAuthToken }>;
 	/**
 	 * Read the profile behind a token already held, with no code to exchange.
+	 * `tokenSecret` is required by OAuth1 providers and ignored by the rest.
 	 * Optional: a driver that cannot do it simply does not offer it.
 	 */
-	userFromToken?(accessToken: string): Promise<OAuthUser>;
+	userFromToken?(accessToken: string, tokenSecret?: string): Promise<OAuthUser>;
 }
 
 /**
