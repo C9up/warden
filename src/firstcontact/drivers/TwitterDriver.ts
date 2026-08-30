@@ -38,11 +38,15 @@ export class TwitterDriver extends Oauth2Driver {
 			id: String(data.id ?? ""),
 			email: String(data.confirmed_email ?? ""),
 			name: String(data.name ?? data.username ?? ""),
+			nickName: typeof data.username === "string" ? data.username : undefined,
 			avatarUrl:
 				typeof data.profile_image_url === "string" &&
 				data.profile_image_url !== ""
 					? data.profile_image_url
 					: undefined,
+			// The field is named `confirmed_email`, but X publishes no separate
+			// verification flag, so nothing here can be claimed.
+			emailVerificationState: "unsupported",
 			raw,
 		};
 	}

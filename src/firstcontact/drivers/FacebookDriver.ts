@@ -34,7 +34,9 @@ export class FacebookDriver extends Oauth2Driver {
 			// The address is absent unless the user granted the `email` scope.
 			email: String(raw.email ?? ""),
 			name: String(raw.name ?? ""),
+			nickName: typeof raw.name === "string" ? raw.name : undefined,
 			avatarUrl: pictureUrl(raw),
+			emailVerificationState: "unsupported",
 			raw,
 		};
 	}

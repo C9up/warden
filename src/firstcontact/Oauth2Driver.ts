@@ -124,6 +124,14 @@ export abstract class Oauth2Driver implements FirstContactDriver {
 		return { user, token: readToken(tokens, accessToken) };
 	}
 
+	/**
+	 * Read the profile behind a token you already hold, with no code to
+	 * exchange — a refreshed token, or one a mobile client obtained itself.
+	 */
+	async userFromToken(accessToken: string): Promise<OAuthUser> {
+		return this.fetchUser(accessToken);
+	}
+
 	/** Trade the authorization code for an access token. */
 	protected async exchange(
 		code: string,
@@ -178,12 +186,34 @@ export abstract class Oauth2Driver implements FirstContactDriver {
 		return this.mapUser(raw);
 	}
 
+	/** An authenticated GET returning a JSON array — some endpoints answer one. */
+	protected async getList(
+		url: string,
+		accessToken: string,
+		params: Record<string, string> = {},
+	): Promise<unknown[]> {
+		const body = await this.#requestJson(url, accessToken, params);
+		return Array.isArray(body) ? body : [];
+	}
+
 	/** An authenticated GET returning the decoded JSON body. */
 	protected async get(
 		url: string,
 		accessToken: string,
 		params: Record<string, string> = {},
 	): Promise<Record<string, unknown>> {
+		const body = await this.#requestJson(url, accessToken, params);
+		return typeof body === "object" && body !== null && !Array.isArray(body)
+			? (body as Record<string, unknown>)
+			: {};
+	}
+
+	/** The authenticated GET itself, before anything is assumed of the body. */
+	async #requestJson(
+		url: string,
+		accessToken: string,
+		params: Record<string, string> = {},
+	): Promise<unknown> {
 		const query = new URLSearchParams(params).toString();
 		const response = await fetch(query ? `${url}?${query}` : url, {
 			headers: {
@@ -196,7 +226,7 @@ export abstract class Oauth2Driver implements FirstContactDriver {
 				`${this.provider} profile request failed (HTTP ${response.status})`,
 			);
 		}
-		return (await response.json()) as Record<string, unknown>;
+		return await response.json();
 	}
 }
 

@@ -16,11 +16,26 @@ export interface OAuthConfig {
 	authorizeParams?: Record<string, string>;
 }
 
+/**
+ * Whether the provider vouches for the address it returned.
+ *
+ * This decides whether an application may link the sign-in to an existing
+ * account by email. `"unverified"` means anyone able to type that address at
+ * the provider now holds it — linking on that basis hands them the account.
+ * `"unsupported"` means the provider says nothing either way, which is not the
+ * same as saying yes.
+ */
+export type EmailVerificationState = "verified" | "unverified" | "unsupported";
+
 export interface OAuthUser {
 	id: string;
 	email: string;
 	name: string;
+	/** The handle the provider shows: a login, a username, a display name. */
+	nickName?: string;
 	avatarUrl?: string;
+	/** Defaults to `"unsupported"` — the answer that assumes nothing. */
+	emailVerificationState?: EmailVerificationState;
 	raw: Record<string, unknown>;
 }
 
@@ -50,6 +65,11 @@ export interface FirstContactDriver {
 		expectedState?: string,
 		codeVerifier?: string,
 	): Promise<{ user: OAuthUser; token: OAuthToken }>;
+	/**
+	 * Read the profile behind a token already held, with no code to exchange.
+	 * Optional: a driver that cannot do it simply does not offer it.
+	 */
+	userFromToken?(accessToken: string): Promise<OAuthUser>;
 }
 
 /**

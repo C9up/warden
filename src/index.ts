@@ -68,7 +68,7 @@ export { FacebookDriver } from "./firstcontact/drivers/FacebookDriver.js";
 export { GitHubDriver } from "./firstcontact/drivers/GitHubDriver.js";
 export { GoogleDriver } from "./firstcontact/drivers/GoogleDriver.js";
 export { LinkedInDriver } from "./firstcontact/drivers/LinkedInDriver.js";
-export { LinkedInMemberDriver } from "./firstcontact/drivers/LinkedInMemberDriver.js";
+export { LinkedInOpenidConnectDriver } from "./firstcontact/drivers/LinkedInOpenidConnectDriver.js";
 export { SpotifyDriver } from "./firstcontact/drivers/SpotifyDriver.js";
 export { TwitterDriver } from "./firstcontact/drivers/TwitterDriver.js";
 export { FirstContactManager } from "./firstcontact/FirstContactManager.js";
@@ -77,6 +77,7 @@ export {
 	Oauth2Driver,
 } from "./firstcontact/Oauth2Driver.js";
 export type {
+	EmailVerificationState,
 	FirstContactDriver,
 	OAuthConfig,
 	OAuthToken,

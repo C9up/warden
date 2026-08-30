@@ -19,7 +19,15 @@ export class DiscordDriver extends Oauth2Driver {
 			id,
 			email: String(raw.email ?? ""),
 			name: String(raw.global_name ?? raw.username ?? ""),
+			nickName: typeof raw.username === "string" ? raw.username : undefined,
 			avatarUrl: avatarUrl(id, raw),
+			// Discord reports it only when the `email` scope was granted.
+			emailVerificationState:
+				"verified" in raw
+					? raw.verified === true
+						? "verified"
+						: "unverified"
+					: "unsupported",
 			raw,
 		};
 	}

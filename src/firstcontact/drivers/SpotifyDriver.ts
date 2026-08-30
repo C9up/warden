@@ -19,7 +19,11 @@ export class SpotifyDriver extends Oauth2Driver {
 			id: String(raw.id ?? ""),
 			email: String(raw.email ?? ""),
 			name: String(raw.display_name ?? ""),
+			nickName:
+				typeof raw.display_name === "string" ? raw.display_name : undefined,
 			avatarUrl: firstImage(raw),
+			// Spotify says nothing about the address it returns.
+			emailVerificationState: "unsupported",
 			raw,
 		};
 	}

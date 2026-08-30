@@ -10,8 +10,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { socials } from "../../src/config.js";
 import { DiscordDriver } from "../../src/firstcontact/drivers/DiscordDriver.js";
 import { FacebookDriver } from "../../src/firstcontact/drivers/FacebookDriver.js";
+import { GitHubDriver } from "../../src/firstcontact/drivers/GitHubDriver.js";
+import { GoogleDriver } from "../../src/firstcontact/drivers/GoogleDriver.js";
 import { LinkedInDriver } from "../../src/firstcontact/drivers/LinkedInDriver.js";
-import { LinkedInMemberDriver } from "../../src/firstcontact/drivers/LinkedInMemberDriver.js";
+import { LinkedInOpenidConnectDriver } from "../../src/firstcontact/drivers/LinkedInOpenidConnectDriver.js";
 import { SpotifyDriver } from "../../src/firstcontact/drivers/SpotifyDriver.js";
 import { TwitterDriver } from "../../src/firstcontact/drivers/TwitterDriver.js";
 import { createCodeVerifier } from "../../src/firstcontact/Oauth2Driver.js";
@@ -54,7 +56,9 @@ describe("warden > social drivers > where the user is sent", () => {
 
 		expect(url(new DiscordDriver(config)).origin).toBe("https://discord.com");
 		expect(url(new FacebookDriver(config)).hostname).toBe("www.facebook.com");
-		expect(url(new LinkedInDriver(config)).hostname).toBe("www.linkedin.com");
+		expect(url(new LinkedInOpenidConnectDriver(config)).hostname).toBe(
+			"www.linkedin.com",
+		);
 		expect(url(new SpotifyDriver(config)).hostname).toBe(
 			"accounts.spotify.com",
 		);
@@ -76,7 +80,10 @@ describe("warden > social drivers > where the user is sent", () => {
 		).toBe("user-read-email");
 		expect(
 			new URL(
-				new LinkedInDriver({ ...config, scopes: ["openid"] }).redirectUrl(),
+				new LinkedInOpenidConnectDriver({
+					...config,
+					scopes: ["openid"],
+				}).redirectUrl(),
 			).searchParams.get("scope"),
 		).toBe("openid");
 	});
@@ -255,7 +262,11 @@ describe("warden > social drivers > reading the profile", () => {
 				picture: "https://cdn/ada.png",
 			}),
 		);
-		const out = await new LinkedInDriver(config).callback("code", "s", "s");
+		const out = await new LinkedInOpenidConnectDriver(config).callback(
+			"code",
+			"s",
+			"s",
+		);
 
 		// `id` does not exist on the OpenID Connect payload.
 		expect(out.user.id).toBe("abc");
@@ -276,11 +287,7 @@ describe("warden > social drivers > reading the profile", () => {
 				],
 			}),
 		);
-		const out = await new LinkedInMemberDriver(config).callback(
-			"code",
-			"s",
-			"s",
-		);
+		const out = await new LinkedInDriver(config).callback("code", "s", "s");
 
 		expect(calls).toHaveLength(3);
 		expect(out.user.name).toBe("Ada Lovelace");
@@ -296,7 +303,7 @@ describe("warden > social drivers > reading the profile", () => {
 		// An empty address downstream reads as "this user has no email", which
 		// is a different problem from "the app was never granted the scope".
 		await expect(
-			new LinkedInMemberDriver(config).callback("code", "s", "s"),
+			new LinkedInDriver(config).callback("code", "s", "s"),
 		).rejects.toThrow(/r_emailaddress/);
 	});
 
@@ -332,13 +339,140 @@ describe("warden > social drivers > reading the profile", () => {
 	});
 });
 
+describe("warden > social drivers > what the provider vouches for", () => {
+	it("reports a verified address as verified", async () => {
+		stubFetch(
+			res(true, 200, { access_token: "tok" }),
+			res(true, 200, {
+				sub: "g1",
+				email: "ada@acme.test",
+				email_verified: true,
+				name: "Ada",
+			}),
+		);
+		const out = await new GoogleDriver(config).callback("code", "s", "s");
+
+		expect(out.user.emailVerificationState).toBe("verified");
+	});
+
+	it("reports an unverified address as unverified, not as silence", async () => {
+		stubFetch(
+			res(true, 200, { access_token: "tok" }),
+			res(true, 200, {
+				sub: "g1",
+				email: "ada@acme.test",
+				email_verified: false,
+			}),
+		);
+		const out = await new GoogleDriver(config).callback("code", "s", "s");
+
+		// Linking an existing account on an unverified address hands it to
+		// whoever typed that address at the provider.
+		expect(out.user.emailVerificationState).toBe("unverified");
+	});
+
+	it("says unsupported where the provider claims nothing", async () => {
+		stubFetch(
+			res(true, 200, { access_token: "tok" }),
+			res(true, 200, { id: "sp", email: "ada@acme.test", images: [] }),
+		);
+		const out = await new SpotifyDriver(config).callback("code", "s", "s");
+
+		// Not the same as "yes" — Spotify simply does not say.
+		expect(out.user.emailVerificationState).toBe("unsupported");
+	});
+
+	it("carries the handle beside the display name", async () => {
+		stubFetch(
+			res(true, 200, { access_token: "tok" }),
+			res(true, 200, { id: "77", username: "kaen", global_name: "Kaen K." }),
+		);
+		const out = await new DiscordDriver(config).callback("code", "s", "s");
+
+		expect(out.user.name).toBe("Kaen K.");
+		expect(out.user.nickName).toBe("kaen");
+	});
+});
+
+describe("warden > social drivers > GitHub private addresses", () => {
+	it("reads the address from /user/emails when the profile hides it", async () => {
+		const calls = stubFetch(
+			res(true, 200, { access_token: "tok" }),
+			res(true, 200, { id: 42, login: "kaen", email: null }),
+			res(true, 200, [
+				{ email: "old@acme.test", primary: false, verified: true },
+				{ email: "ada@acme.test", primary: true, verified: true },
+			]),
+		);
+		const out = await new GitHubDriver(config).callback("code", "s", "s");
+
+		// Most accounts keep the address private, so /user returns null and the
+		// sign-in would otherwise arrive with no address at all.
+		expect(calls[2].url).toContain("/user/emails");
+		expect(out.user.email).toBe("ada@acme.test");
+		expect(out.user.emailVerificationState).toBe("verified");
+	});
+
+	it("does not ask for the address when the profile already carries one", async () => {
+		const calls = stubFetch(
+			res(true, 200, { access_token: "tok" }),
+			res(true, 200, { id: 42, login: "kaen", email: "ada@acme.test" }),
+		);
+		await new GitHubDriver(config).callback("code", "s", "s");
+
+		expect(calls).toHaveLength(2);
+	});
+
+	it("signs the user in without an address when the scope was not granted", async () => {
+		stubFetch(
+			res(true, 200, { access_token: "tok" }),
+			res(true, 200, { id: 42, login: "kaen", email: null }),
+			res(false, 403, {}),
+		);
+		const out = await new GitHubDriver(config).callback("code", "s", "s");
+
+		// A sign-in with no address is still a sign-in; refusing it would lock
+		// out every account that declined `user:email`.
+		expect(out.user.id).toBe("42");
+		expect(out.user.email).toBe("");
+	});
+
+	it("prefers a verified address over an unverified primary", async () => {
+		stubFetch(
+			res(true, 200, { access_token: "tok" }),
+			res(true, 200, { id: 42, login: "kaen", email: null }),
+			res(true, 200, [
+				{ email: "unverified@acme.test", primary: true, verified: false },
+				{ email: "ada@acme.test", primary: false, verified: true },
+			]),
+		);
+		const out = await new GitHubDriver(config).callback("code", "s", "s");
+
+		expect(out.user.email).toBe("ada@acme.test");
+	});
+});
+
+describe("warden > social drivers > a token already held", () => {
+	it("reads a profile with no code to exchange", async () => {
+		const calls = stubFetch(
+			res(true, 200, { id: "sp", display_name: "Ada", images: [] }),
+		);
+		const user = await new SpotifyDriver(config).userFromToken("tok");
+
+		// One call: the profile. No token endpoint involved.
+		expect(calls).toHaveLength(1);
+		expect(calls[0].url).toContain("api.spotify.com");
+		expect(user.name).toBe("Ada");
+	});
+});
+
 describe("warden > socials", () => {
 	it("builds the driver each helper names", () => {
 		expect(socials.discord(config)()).toBeInstanceOf(DiscordDriver);
 		expect(socials.facebook(config)()).toBeInstanceOf(FacebookDriver);
 		expect(socials.linkedin(config)()).toBeInstanceOf(LinkedInDriver);
-		expect(socials.linkedinMember(config)()).toBeInstanceOf(
-			LinkedInMemberDriver,
+		expect(socials.linkedinOpenidConnect(config)()).toBeInstanceOf(
+			LinkedInOpenidConnectDriver,
 		);
 		expect(socials.spotify(config)()).toBeInstanceOf(SpotifyDriver);
 		expect(socials.twitter(config)()).toBeInstanceOf(TwitterDriver);

@@ -11,7 +11,7 @@ export class GoogleDriver extends Oauth2Driver {
 		"https://accounts.google.com/o/oauth2/v2/auth";
 	protected readonly accessTokenUrl = "https://oauth2.googleapis.com/token";
 	protected readonly userInfoUrl =
-		"https://www.googleapis.com/oauth2/v2/userinfo";
+		"https://www.googleapis.com/oauth2/v3/userinfo";
 	protected readonly defaultScopes = ["openid", "email", "profile"] as const;
 
 	/** Asking for offline access is what makes Google issue a refresh token. */
@@ -21,10 +21,17 @@ export class GoogleDriver extends Oauth2Driver {
 
 	protected mapUser(raw: Record<string, unknown>): OAuthUser {
 		return {
-			id: String(raw.id ?? ""),
+			// The OpenID Connect endpoint calls the subject `sub`; the older one
+			// called it `id`, and both are the same value.
+			id: String(raw.sub ?? raw.id ?? ""),
 			email: String(raw.email ?? ""),
 			name: String(raw.name ?? ""),
+			nickName: str(raw, "given_name") ?? str(raw, "name"),
 			avatarUrl: str(raw, "picture"),
+			emailVerificationState:
+				raw.email_verified === true || raw.verified_email === true
+					? "verified"
+					: "unverified",
 			raw,
 		};
 	}

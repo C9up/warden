@@ -54,6 +54,21 @@ export class FirstContactManager {
 		return this.use(name).callback(code, state, expectedState, codeVerifier);
 	}
 
+	/**
+	 * Read the profile behind a token already held, through the named provider.
+	 * Throws when that driver has no way to — rather than answering with a
+	 * profile it did not fetch.
+	 */
+	async userFromToken(name: string, accessToken: string): Promise<OAuthUser> {
+		const driver = this.use(name);
+		if (typeof driver.userFromToken !== "function") {
+			throw new Error(
+				`[warden] The '${name}' driver cannot read a profile from an existing token.`,
+			);
+		}
+		return driver.userFromToken(accessToken);
+	}
+
 	get registeredDrivers(): string[] {
 		return [...this.#drivers.keys()];
 	}

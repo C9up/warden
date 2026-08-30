@@ -23,7 +23,7 @@ import { FacebookDriver } from "./firstcontact/drivers/FacebookDriver.js";
 import { GitHubDriver } from "./firstcontact/drivers/GitHubDriver.js";
 import { GoogleDriver } from "./firstcontact/drivers/GoogleDriver.js";
 import { LinkedInDriver } from "./firstcontact/drivers/LinkedInDriver.js";
-import { LinkedInMemberDriver } from "./firstcontact/drivers/LinkedInMemberDriver.js";
+import { LinkedInOpenidConnectDriver } from "./firstcontact/drivers/LinkedInOpenidConnectDriver.js";
 import { SpotifyDriver } from "./firstcontact/drivers/SpotifyDriver.js";
 import { TwitterDriver } from "./firstcontact/drivers/TwitterDriver.js";
 import type { FirstContactDriver, OAuthConfig } from "./firstcontact/types.js";
@@ -123,16 +123,16 @@ export const socials = {
 	google(config: OAuthConfig): SocialDriverFactory {
 		return () => new GoogleDriver(config);
 	},
-	/** LinkedIn through OpenID Connect — what a new application is issued. */
+	/**
+	 * LinkedIn through the member API, for an application whose LinkedIn app
+	 * holds `r_liteprofile` / `r_emailaddress`.
+	 */
 	linkedin(config: OAuthConfig): SocialDriverFactory {
 		return () => new LinkedInDriver(config);
 	},
-	/**
-	 * LinkedIn through the older member API, for an application whose LinkedIn
-	 * app still has `r_liteprofile` / `r_emailaddress`.
-	 */
-	linkedinMember(config: OAuthConfig): SocialDriverFactory {
-		return () => new LinkedInMemberDriver(config);
+	/** LinkedIn through OpenID Connect — what a new application is issued. */
+	linkedinOpenidConnect(config: OAuthConfig): SocialDriverFactory {
+		return () => new LinkedInOpenidConnectDriver(config);
 	},
 	spotify(config: OAuthConfig): SocialDriverFactory {
 		return () => new SpotifyDriver(config);
