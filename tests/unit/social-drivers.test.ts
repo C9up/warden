@@ -15,7 +15,7 @@ import { GoogleDriver } from "../../src/firstcontact/drivers/GoogleDriver.js";
 import { LinkedInDriver } from "../../src/firstcontact/drivers/LinkedInDriver.js";
 import { LinkedInOpenidConnectDriver } from "../../src/firstcontact/drivers/LinkedInOpenidConnectDriver.js";
 import { SpotifyDriver } from "../../src/firstcontact/drivers/SpotifyDriver.js";
-import { TwitterDriver } from "../../src/firstcontact/drivers/TwitterDriver.js";
+import { TwitterXDriver } from "../../src/firstcontact/drivers/TwitterXDriver.js";
 import { createCodeVerifier } from "../../src/firstcontact/Oauth2Driver.js";
 import type { OAuthConfig } from "../../src/firstcontact/types.js";
 
@@ -103,14 +103,14 @@ describe("warden > social drivers > where the user is sent", () => {
 describe("warden > social drivers > PKCE", () => {
 	it("refuses to send a user to X without a code verifier", () => {
 		// The provider would reject the URL; failing here says why.
-		expect(() => new TwitterDriver(config).redirectUrl("st8")).toThrow(
+		expect(() => new TwitterXDriver(config).redirectUrl("st8")).toThrow(
 			/requires PKCE/,
 		);
 	});
 
 	it("challenges with the S256 hash of the verifier, never the verifier", () => {
 		const verifier = createCodeVerifier();
-		const url = new URL(new TwitterDriver(config).redirectUrl("st8", verifier));
+		const url = new URL(new TwitterXDriver(config).redirectUrl("st8", verifier));
 
 		expect(url.searchParams.get("code_challenge_method")).toBe("S256");
 		const challenge = url.searchParams.get("code_challenge");
@@ -123,7 +123,7 @@ describe("warden > social drivers > PKCE", () => {
 
 	it("refuses the callback without the verifier it was redirected with", async () => {
 		await expect(
-			new TwitterDriver(config).callback("code", "s", "s"),
+			new TwitterXDriver(config).callback("code", "s", "s"),
 		).rejects.toThrow(/requires PKCE/);
 	});
 
@@ -132,7 +132,7 @@ describe("warden > social drivers > PKCE", () => {
 			res(true, 200, { access_token: "tok" }),
 			res(true, 200, { data: { id: "1", username: "kaen" } }),
 		);
-		await new TwitterDriver(config).callback("code", "s", "s", "verifier-x");
+		await new TwitterXDriver(config).callback("code", "s", "s", "verifier-x");
 
 		expect(body(calls[0]).get("code_verifier")).toBe("verifier-x");
 	});
@@ -327,7 +327,7 @@ describe("warden > social drivers > reading the profile", () => {
 			res(true, 200, { access_token: "tok" }),
 			res(true, 200, { data: { id: "x1", username: "kaen" } }),
 		);
-		const out = await new TwitterDriver(config).callback(
+		const out = await new TwitterXDriver(config).callback(
 			"code",
 			"s",
 			"s",
@@ -475,6 +475,6 @@ describe("warden > socials", () => {
 			LinkedInOpenidConnectDriver,
 		);
 		expect(socials.spotify(config)()).toBeInstanceOf(SpotifyDriver);
-		expect(socials.twitter(config)()).toBeInstanceOf(TwitterDriver);
+		expect(socials.twitterX(config)()).toBeInstanceOf(TwitterXDriver);
 	});
 });

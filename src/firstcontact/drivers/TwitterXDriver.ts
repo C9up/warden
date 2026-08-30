@@ -9,7 +9,7 @@
 import { Oauth2Driver } from "../Oauth2Driver.js";
 import type { OAuthUser } from "../types.js";
 
-export class TwitterDriver extends Oauth2Driver {
+export class TwitterXDriver extends Oauth2Driver {
 	protected readonly provider = "X";
 	protected readonly authorizeUrl = "https://x.com/i/oauth2/authorize";
 	protected readonly accessTokenUrl = "https://api.x.com/2/oauth2/token";
