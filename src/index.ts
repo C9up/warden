@@ -44,13 +44,18 @@ export type {
 	BouncerEmitter,
 	PolicyContainerResolver,
 } from "./bouncer/types.js";
-export type { GuardFactory, WardenConfig } from "./config.js";
+export type {
+	GuardFactory,
+	SocialDriverFactory,
+	WardenConfig,
+} from "./config.js";
 export {
 	apiKeyGuard,
 	basicAuthGuard,
 	defineConfig,
 	jwtGuard,
 	sessionGuard,
+	socials,
 } from "./config.js";
 export { configure } from "./configure.js";
 export {

@@ -18,6 +18,9 @@
 import type { AuthStrategy, UserPayload } from "./AuthManager.js";
 import type { BasePolicy } from "./bouncer/BasePolicy.js";
 import type { Ability } from "./bouncer/types.js";
+import { GitHubDriver } from "./firstcontact/drivers/GitHubDriver.js";
+import { GoogleDriver } from "./firstcontact/drivers/GoogleDriver.js";
+import type { FirstContactDriver, OAuthConfig } from "./firstcontact/types.js";
 import type { MfaManager } from "./mfa/MfaManager.js";
 import type { RightsStore, Scope } from "./rights/types.js";
 import type { ApiKeyConfig } from "./strategies/ApiKeyStrategy.js";
@@ -84,6 +87,31 @@ export function apiKeyGuard(config: ApiKeyConfig): GuardFactory {
 export function basicAuthGuard(config: BasicAuthConfig): GuardFactory {
 	return new BasicAuthStrategy(config);
 }
+
+/** A social sign-in driver, built when the provider registers. */
+export type SocialDriverFactory = () => FirstContactDriver;
+
+/**
+ * The social sign-in providers a config file names.
+ *
+ *   socials: {
+ *     google: socials.google({ clientId, clientSecret, callbackUrl }),
+ *   }
+ *
+ * The key is YOURS: two entries may use the same driver with different
+ * credentials, and `firstContact.use(name)` asks for the key, not the driver.
+ *
+ * Factories are lazy, so a config that names a provider the environment never
+ * selects costs nothing to declare.
+ */
+export const socials = {
+	google(config: OAuthConfig): SocialDriverFactory {
+		return () => new GoogleDriver(config);
+	},
+	github(config: OAuthConfig): SocialDriverFactory {
+		return () => new GitHubDriver(config);
+	},
+};
 
 export interface WardenConfig {
 	/**
@@ -152,6 +180,17 @@ export interface WardenConfig {
 	 * `MfaManager` / `"mfa"`. Required to use `@RequireMfa` step-up flows.
 	 */
 	mfa?: { manager: MfaManager };
+	/**
+	 * Social sign-in providers, keyed by the name `firstContact.use(name)` asks
+	 * for. Build the entries with the {@link socials} helpers, or pass a driver
+	 * of your own.
+	 *
+	 * Declared here, the manager is built and registered in the container as
+	 * `FirstContactManager` / `"socials"`. Without this section there is no
+	 * manager to resolve — which is what an application had to assemble by hand
+	 * before.
+	 */
+	socials?: Record<string, FirstContactDriver | SocialDriverFactory>;
 }
 
 /** Typed config helper — identity function for editor inference. */

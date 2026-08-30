@@ -1,6 +1,7 @@
 import { AuthManager, type AuthStrategy } from "./AuthManager.js";
 import type { WardenConfig } from "./config.js";
 import { WardenError } from "./errors.js";
+import { FirstContactManager } from "./firstcontact/FirstContactManager.js";
 import { MfaManager } from "./mfa/MfaManager.js";
 import type { BouncerRegistry } from "./middleware.js";
 import { MemoryRightsStore } from "./rights/MemoryRightsStore.js";
@@ -147,6 +148,23 @@ export default class WardenProvider {
 		if (mfa) {
 			this.app.container.singleton(MfaManager, () => mfa);
 			this.app.container.singleton("mfa", () => mfa);
+		}
+
+		// Social sign-in (optional): the config names the providers, this builds
+		// the manager they live in. Nothing registered it before — the class was
+		// exported and every application had to assemble it by hand, which is
+		// why `config.auth.socials` did not exist.
+		const socials = config.socials;
+		if (socials !== undefined && Object.keys(socials).length > 0) {
+			const firstContact = new FirstContactManager();
+			for (const [name, entry] of Object.entries(socials)) {
+				firstContact.register(
+					name,
+					typeof entry === "function" ? entry() : entry,
+				);
+			}
+			this.app.container.singleton(FirstContactManager, () => firstContact);
+			this.app.container.singleton("socials", () => firstContact);
 		}
 	}
 
