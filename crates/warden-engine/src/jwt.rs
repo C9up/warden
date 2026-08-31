@@ -43,12 +43,16 @@ pub fn verify(token: &str, secret: &[u8]) -> Result<String, String> {
 
     // Verify the algorithm claim before checking the signature — prevents
     // algorithm confusion attacks where an attacker sends `{"alg":"none"}`.
-    let header_bytes = URL_SAFE_NO_PAD.decode(parts[0])
+    let header_bytes = URL_SAFE_NO_PAD
+        .decode(parts[0])
         .map_err(|_| "Invalid header encoding".to_string())?;
-    let header: serde_json::Value = serde_json::from_slice(&header_bytes)
-        .map_err(|_| "Invalid header JSON".to_string())?;
+    let header: serde_json::Value =
+        serde_json::from_slice(&header_bytes).map_err(|_| "Invalid header JSON".to_string())?;
     if header["alg"].as_str() != Some("HS256") {
-        return Err(format!("Unsupported JWT algorithm: {:?}. Only HS256 is accepted.", header["alg"]));
+        return Err(format!(
+            "Unsupported JWT algorithm: {:?}. Only HS256 is accepted.",
+            header["alg"]
+        ));
     }
 
     let message = format!("{}.{}", parts[0], parts[1]);

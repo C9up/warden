@@ -4,7 +4,12 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::panic::catch_unwind;
 
-fn wrap<T: Send + 'static, F: FnOnce() -> std::result::Result<T, String> + std::panic::UnwindSafe>(f: F) -> Result<T> {
+fn wrap<
+    T: Send + 'static,
+    F: FnOnce() -> std::result::Result<T, String> + std::panic::UnwindSafe,
+>(
+    f: F,
+) -> Result<T> {
     match catch_unwind(f) {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(Error::from_reason(e)),
