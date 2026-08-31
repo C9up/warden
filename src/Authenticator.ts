@@ -73,6 +73,7 @@ interface RememberMeIssuer {
 		state?: SessionGuardState,
 	): Promise<{ user: UserPayload; cookieValue: string } | null>;
 	seatSession(user: UserPayload, session: SessionStore): void;
+	revokeRememberMeToken(cookieValue: unknown): Promise<void>;
 	readonly rememberMeCookieName: string;
 	readonly rememberMeAgeSeconds: number;
 }
@@ -90,6 +91,7 @@ function isRememberMeIssuer(
 		typeof Reflect.get(strategy, "authenticateViaRememberMeToken") ===
 			"function" &&
 		typeof Reflect.get(strategy, "seatSession") === "function" &&
+		typeof Reflect.get(strategy, "revokeRememberMeToken") === "function" &&
 		typeof Reflect.get(strategy, "rememberMeCookieName") === "string" &&
 		typeof Reflect.get(strategy, "rememberMeAgeSeconds") === "number"
 	);
@@ -376,24 +378,47 @@ export class GuardAccessor {
 	 */
 	async login(user: UserPayload, remember = false): Promise<void> {
 		const session = this.#requireSession();
-		if (remember) await this.#issueRememberMe(user);
-		else this.#clearRememberMe();
+		const issued = remember ? await this.#issueRememberMe(user) : undefined;
+		if (!remember) this.#clearRememberMe();
 		try {
 			await this.#auth.login(user, session, this.#name, this.#state);
 		} catch (err) {
-			// The token was minted and the cookie sent before the session was
+			// The token is minted and the cookie sent before the session is
 			// seated — upstream's order, and it has to be, because the cookie
-			// belongs on the same response. But upstream's session write is a
-			// map assignment; here `login()` also fires listeners, any of which
-			// can throw. A failed sign-in that still handed the browser a
-			// standing credential is the one outcome worth undoing.
-			if (remember) this.#clearRememberMe();
+			// belongs on the same response.
+			//
+			// NAMED DEVIATION — upstream does not roll any of this back; it has
+			// no need to, because its session write is a map assignment that
+			// cannot fail. Here `login()` also fires listeners, any of which
+			// can throw, so the window is real.
+			//
+			// And clearing the cookie is not enough: the token was PERSISTED,
+			// and its value reached the wire, where it may have been captured
+			// — a proxy log, an already-flushed response. Revoking the row is
+			// what makes a failed sign-in leave nothing usable behind.
+			if (issued !== undefined) await this.#revokeRememberMe(issued);
 			throw err;
 		}
 	}
 
-	/** Mint the token and put it in the browser, or say why it cannot. */
-	async #issueRememberMe(user: UserPayload): Promise<void> {
+	/** Undo an issued remember-me: the stored row first, then the cookie. */
+	async #revokeRememberMe(value: string): Promise<void> {
+		const strategy = strategyOrUndefined(this.#auth, this.#name);
+		if (strategy && isRememberMeIssuer(strategy)) {
+			// Best-effort: a store that is itself down must not replace the
+			// caller's error with its own.
+			await strategy.revokeRememberMeToken(value).catch(() => undefined);
+		}
+		this.#clearRememberMe();
+	}
+
+	/**
+	 * Mint the token and put it in the browser, or say why it cannot.
+	 *
+	 * Returns the minted value so a failure further along can revoke it: a
+	 * persisted token nobody can reach is still a credential.
+	 */
+	async #issueRememberMe(user: UserPayload): Promise<string> {
 		const strategy = strategyOrUndefined(this.#auth, this.#name);
 		if (!strategy || !isRememberMeIssuer(strategy)) {
 			throw new WardenError(
@@ -424,10 +449,18 @@ export class GuardAccessor {
 				},
 			);
 		}
-		write.call(this.#ctx.response, strategy.rememberMeCookieName, value, {
-			maxAge: strategy.rememberMeAgeSeconds,
-			httpOnly: true,
-		});
+		try {
+			write.call(this.#ctx.response, strategy.rememberMeCookieName, value, {
+				maxAge: strategy.rememberMeAgeSeconds,
+				httpOnly: true,
+			});
+		} catch (err) {
+			// The row exists and the browser will never hold it: a credential
+			// nobody can reach is still one, so it does not survive the failure.
+			await strategy.revokeRememberMeToken(value).catch(() => undefined);
+			throw err;
+		}
+		return value;
 	}
 
 	/** Drop whatever remember-me cookie the browser is still holding. */

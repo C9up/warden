@@ -741,3 +741,93 @@ describe("warden > a failed sign-in leaves no standing credential", () => {
 		expect(jar.remember_web).toBeUndefined();
 	});
 });
+
+describe("warden > a failed sign-in leaves no usable token behind", () => {
+	const build = (
+		opts: { failSession?: boolean; failCookie?: boolean } = {},
+	) => {
+		const jar: Record<string, string> = {};
+		// Every value handed to the cookie writer, so a test can present the
+		// minted token back even after the cookie has been cleared.
+		const written: string[] = [];
+		const strategy = new SessionStrategy({
+			findUser: async () => okUser,
+			rememberMeTokens: new MemoryRememberMeTokenDriver(),
+			rememberMeAge: 3600,
+		});
+		const manager = new AuthManager({
+			default: "web",
+			guards: { web: strategy },
+		});
+		const ctx = {
+			request: {
+				headers: () => ({}),
+				encryptedCookie: (n: string) => jar[n] ?? null,
+			},
+			response: {
+				status: () => undefined,
+				json: () => undefined,
+				encryptedCookie: (n: string, v: string) => {
+					written.push(v);
+					if (opts.failCookie) throw new Error("response already sent");
+					jar[n] = v;
+				},
+				clearCookie: (n: string) => {
+					delete jar[n];
+				},
+			},
+			session: {
+				get: () => undefined,
+				put: () => {
+					if (opts.failSession) throw new Error("session store is down");
+				},
+				forget: () => undefined,
+				regenerate: () => undefined,
+			},
+		} as unknown as WardenContext;
+		return { jar, written, manager, ctx, strategy };
+	};
+
+	it("revokes the stored token when the session write throws", async () => {
+		const { jar, written, manager, ctx, strategy } = build({
+			failSession: true,
+		});
+
+		await expect(
+			new Authenticator(ctx, manager).use("web").login(okUser, true),
+		).rejects.toThrow(/session store is down/);
+
+		// Clearing the cookie is not enough: the row was PERSISTED, and the
+		// value reached the wire, where it may have been captured — a proxy
+		// log, an already-flushed response.
+		expect(jar.remember_web).toBeUndefined();
+		const minted = written.at(-1);
+		expect(minted, "a token was minted").toBeDefined();
+		expect(await strategy.authenticateViaRememberMeToken(minted)).toBeNull();
+	});
+
+	it("revokes it when the cookie itself cannot be written", async () => {
+		const { written, manager, ctx, strategy } = build({ failCookie: true });
+
+		await expect(
+			new Authenticator(ctx, manager).use("web").login(okUser, true),
+		).rejects.toThrow(/response already sent/);
+
+		// The row exists and the browser will never hold it.
+		const minted = written.at(-1);
+		expect(minted, "a token was minted").toBeDefined();
+		expect(await strategy.authenticateViaRememberMeToken(minted)).toBeNull();
+	});
+
+	it("keeps the token when the sign-in succeeds", async () => {
+		const { jar, written, manager, ctx, strategy } = build();
+
+		await new Authenticator(ctx, manager).use("web").login(okUser, true);
+
+		expect(jar.remember_web).toBeTruthy();
+		// Still usable — that is the whole point of ticking the box.
+		expect(
+			await strategy.authenticateViaRememberMeToken(written.at(-1)),
+		).not.toBeNull();
+	});
+});
