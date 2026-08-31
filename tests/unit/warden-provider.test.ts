@@ -70,13 +70,13 @@ const validJwtConfig: NonNullable<WardenConfig["jwt"]> = {
 };
 
 describe("warden > WardenProvider", () => {
-	it("THROWS WARDEN_NO_AUTH_CONFIG at register-time when no jwt config is provided", () => {
+	it("THROWS E_WARDEN_NO_AUTH_CONFIG at register-time when no jwt config is provided", () => {
 		// Was: silently registered an empty AuthManager and the first
 		// protected request crashed deep in the middleware loop. Now boot
 		// fails fast with an actionable error pointing at reamrc.ts.
 		const { app } = makeFakeApp({ defaultStrategy: "jwt" });
 		expect(() => new WardenProvider(app).register()).toThrow(
-			/WARDEN_NO_AUTH_CONFIG|no authentication guards configured/,
+			/E_WARDEN_NO_AUTH_CONFIG|no authentication guards configured/,
 		);
 	});
 
@@ -241,12 +241,12 @@ describe("warden > WardenProvider", () => {
 		}
 	});
 
-	it("THROWS WARDEN_NO_AUTH_CONFIG when 'auth' config is entirely absent", () => {
+	it("THROWS E_WARDEN_NO_AUTH_CONFIG when 'auth' config is entirely absent", () => {
 		// Same fail-fast guard from a different angle — `config.get('auth')`
 		// returns undefined (no `config.warden.auth` block at all).
 		const { app } = makeFakeApp(undefined);
 		expect(() => new WardenProvider(app).register()).toThrow(
-			/WARDEN_NO_AUTH_CONFIG|no authentication guards configured/,
+			/E_WARDEN_NO_AUTH_CONFIG|no authentication guards configured/,
 		);
 	});
 });

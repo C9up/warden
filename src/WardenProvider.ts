@@ -42,7 +42,7 @@ export default class WardenProvider {
 		const hasGuards = config?.guards && Object.keys(config.guards).length > 0;
 		if (!hasGuards && !config?.jwt && !config?.session && !config?.apiKey) {
 			throw new WardenError(
-				"WARDEN_NO_AUTH_CONFIG",
+				"E_WARDEN_NO_AUTH_CONFIG",
 				`@c9up/warden: no authentication guards configured. Set config.warden.auth.guards (AdonisJS form) or at least one of .jwt / .session / .apiKey in your reamrc.ts before registering WardenProvider.`,
 			);
 		}

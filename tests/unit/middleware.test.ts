@@ -496,7 +496,7 @@ describe("warden > wardenMiddleware — strategy iteration", () => {
 			expect(next.called).toBe(false);
 			expect(response.status).toBe(500);
 			expect(response.body).toMatchObject({
-				error: { code: "AUTH_STRATEGY_ERROR" },
+				error: { code: "E_WARDEN_AUTH_STRATEGY_ERROR" },
 			});
 			// Both strategy crashes were logged (one per attempted strategy).
 			expect(captured.length).toBe(2);
@@ -709,7 +709,9 @@ describe("warden > wardenMiddleware — permission and role checks", () => {
 
 		expect(next.called).toBe(false);
 		expect(response.status).toBe(403);
-		expect(response.body).toMatchObject({ error: { code: "FORBIDDEN" } });
+		expect(response.body).toMatchObject({
+			error: { code: "E_WARDEN_FORBIDDEN" },
+		});
 	});
 
 	it("authorizes when the resolved set covers all required permissions", async () => {
@@ -792,7 +794,9 @@ describe("warden > wardenMiddleware — permission and role checks", () => {
 		await wardenMiddleware(ctx, next.fn);
 		expect(next.called).toBe(false);
 		expect(response.status).toBe(403);
-		expect(response.body).toMatchObject({ error: { code: "FORBIDDEN" } });
+		expect(response.body).toMatchObject({
+			error: { code: "E_WARDEN_FORBIDDEN" },
+		});
 	});
 
 	it("authorizes a role-gated route via payload roles with no store config (D2)", async () => {
@@ -833,7 +837,9 @@ describe("warden > wardenMiddleware — permission and role checks", () => {
 		await wardenMiddleware(ctx, () => {});
 
 		expect(response.status).toBe(403);
-		expect(response.body).toMatchObject({ error: { code: "FORBIDDEN" } });
+		expect(response.body).toMatchObject({
+			error: { code: "E_WARDEN_FORBIDDEN" },
+		});
 	});
 
 	it("requires both permissions AND roles when both are declared (AND gate, not OR)", async () => {

@@ -110,13 +110,13 @@ describe("warden > initializeBouncer", () => {
 		);
 	});
 
-	it("throws WARDEN_AUTHORIZATION_FAILURE (status 403) on authorize denial", async () => {
+	it("throws AUTHORIZATION_FAILURE (status 403) on authorize denial", async () => {
 		const { ctx } = buildCtx({ user: { id: "u2" }, registry });
 		await initializeBouncer(ctx, () => {});
 		await expect(
 			ctx.bouncer?.authorize("post.edit", { ownerId: "u1" }),
 		).rejects.toMatchObject({
-			code: "WARDEN_AUTHORIZATION_FAILURE",
+			code: "E_WARDEN_AUTHORIZATION_FAILURE",
 			status: 403,
 		});
 	});
@@ -158,7 +158,7 @@ describe("warden > initializeBouncer", () => {
 		const { ctx } = buildCtx({ user: { id: "u1" }, registry });
 		await initializeBouncer(ctx, () => {});
 		await expect(ctx.bouncer?.allows("does.not.exist")).rejects.toMatchObject({
-			code: "WARDEN_UNKNOWN_ABILITY",
+			code: "E_WARDEN_UNKNOWN_ABILITY",
 		});
 	});
 
@@ -168,7 +168,7 @@ describe("warden > initializeBouncer", () => {
 		await expect(
 			ctx.bouncer?.authorize("post.edit", { ownerId: "u1" }),
 		).rejects.toMatchObject({
-			code: "WARDEN_AUTHORIZATION_FAILURE",
+			code: "E_WARDEN_AUTHORIZATION_FAILURE",
 			status: 403,
 		});
 	});

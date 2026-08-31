@@ -4,7 +4,7 @@
  * One cohesive flow exercising every facet TOGETHER through the real
  * `MemoryRightsStore` + `RightsResolver` + `Bouncer` (no stubs): RBAC role→perm,
  * ACL direct grant, ownership-in-policy, multi-tenant isolation + global→tenant
- * inheritance, and the `authorize()`→`WARDEN_AUTHORIZATION_FAILURE` throw. The
+ * inheritance, and the `authorize()`→`AUTHORIZATION_FAILURE` throw. The
  * value here is the INTERACTION — the per-unit behaviour is pinned by
  * `bouncer-*`/`rights-resolver`/`memory-rights-store`; this proves they compose.
  *
@@ -154,7 +154,7 @@ describe("warden > authorization e2e (AC2 — all facets in one flow)", () => {
 		await expect(
 			bouncerFor({ id: "nobody" }, store).with(PostPolicy).authorize("edit"),
 		).rejects.toMatchObject({
-			code: "WARDEN_AUTHORIZATION_FAILURE",
+			code: "E_WARDEN_AUTHORIZATION_FAILURE",
 			status: 403,
 		});
 	});

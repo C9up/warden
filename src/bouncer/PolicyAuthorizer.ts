@@ -144,7 +144,7 @@ export class PolicyAuthorizer {
 		return !(await this.execute(action, ...args)).authorized;
 	}
 
-	/** Resolves on allow; throws `WARDEN_AUTHORIZATION_FAILURE` on deny (D2). */
+	/** Resolves on allow; throws `AUTHORIZATION_FAILURE` on deny (D2). */
 	async authorize(action: string, ...args: unknown[]): Promise<void> {
 		const response = await this.execute(action, ...args);
 		if (!response.authorized) {

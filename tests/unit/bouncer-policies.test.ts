@@ -38,7 +38,7 @@ describe("warden > bouncer > policies", () => {
 		const stranger = new Bouncer(user({ id: "u2" })).with(PostPolicy);
 		expect(await stranger.allows("edit", post)).toBe(false);
 		await expect(stranger.authorize("edit", post)).rejects.toMatchObject({
-			code: "WARDEN_AUTHORIZATION_FAILURE",
+			code: "E_WARDEN_AUTHORIZATION_FAILURE",
 		});
 	});
 
@@ -165,10 +165,10 @@ describe("warden > bouncer > policies", () => {
 		expect(await bouncer.with("Post").allows("edit", post)).toBe(true);
 	});
 
-	it("throws WARDEN_UNKNOWN_POLICY for an unregistered policy name", async () => {
+	it("throws E_WARDEN_UNKNOWN_POLICY for an unregistered policy name", async () => {
 		await expect(
 			new Bouncer(user()).with("Ghost").execute("edit"),
-		).rejects.toMatchObject({ code: "WARDEN_UNKNOWN_POLICY" });
+		).rejects.toMatchObject({ code: "E_WARDEN_UNKNOWN_POLICY" });
 	});
 
 	it("rejects dispatching to a non-action member (hooks, constructor, inherited)", async () => {
@@ -181,7 +181,7 @@ describe("warden > bouncer > policies", () => {
 			"toString",
 		]) {
 			await expect(authorizer.execute(action)).rejects.toMatchObject({
-				code: "WARDEN_UNKNOWN_POLICY_ACTION",
+				code: "E_WARDEN_UNKNOWN_POLICY_ACTION",
 			});
 		}
 	});

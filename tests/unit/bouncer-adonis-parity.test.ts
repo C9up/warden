@@ -167,7 +167,7 @@ describe("warden > bouncer > adonis parity fixes", () => {
 			thrown = error;
 		}
 		expect(thrown).toMatchObject({
-			code: "WARDEN_AUTHORIZATION_FAILURE",
+			code: "E_WARDEN_AUTHORIZATION_FAILURE",
 			status: 403,
 		});
 	});

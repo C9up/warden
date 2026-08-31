@@ -5,7 +5,7 @@
  * 2026-06-01): standalone abilities via `Bouncer.ability`, class-based policies
  * via `with(Policy)`, the four verbs `allows`/`denies`/`authorize`/`execute`,
  * and guest-denied-by-default. The user is `UserPayload | null` (guest = null,
- * D3); `authorize` throws `WARDEN_AUTHORIZATION_FAILURE` carrying `status: 403`
+ * D3); `authorize` throws `AUTHORIZATION_FAILURE` carrying `status: 403`
  * (D2). 56.2 ships PURE mechanics — it does NOT consult the Layer-1
  * `RightsResolver` (D4); abilities/policy methods receive `(user, ...args)` and
  * the developer writes the predicate, exactly as Adonis does.
@@ -320,7 +320,7 @@ export class Bouncer {
 		return !(await this.#evaluateAbility(ability, args)).authorized;
 	}
 
-	/** Resolves on allow; throws `WARDEN_AUTHORIZATION_FAILURE` on deny (D2). */
+	/** Resolves on allow; throws `AUTHORIZATION_FAILURE` on deny (D2). */
 	authorize<Args extends unknown[]>(
 		ability: Ability<Args>,
 		...args: Args

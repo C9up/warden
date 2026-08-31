@@ -53,7 +53,7 @@ describe("warden > bouncer > abilities", () => {
 		expect(response.status).toBe(418);
 	});
 
-	it("authorize resolves on allow and throws WARDEN_AUTHORIZATION_FAILURE (status 403) on deny", async () => {
+	it("authorize resolves on allow and throws AUTHORIZATION_FAILURE (status 403) on deny", async () => {
 		const bouncer = new Bouncer(user());
 		await expect(
 			bouncer.authorize(Bouncer.ability(() => true)),
@@ -67,7 +67,7 @@ describe("warden > bouncer > abilities", () => {
 		}
 		expect(thrown).toBeInstanceOf(WardenError);
 		if (thrown instanceof WardenError) {
-			expect(thrown.code).toBe("WARDEN_AUTHORIZATION_FAILURE");
+			expect(thrown.code).toBe("E_WARDEN_AUTHORIZATION_FAILURE");
 			expect(thrown.status).toBe(403);
 		}
 	});
@@ -107,9 +107,9 @@ describe("warden > bouncer > abilities", () => {
 		expect(await bouncer.allows(ability, "someone-else")).toBe(false);
 	});
 
-	it("throws WARDEN_UNKNOWN_ABILITY for an unregistered name", async () => {
+	it("throws E_WARDEN_UNKNOWN_ABILITY for an unregistered name", async () => {
 		await expect(new Bouncer(user()).execute("ghost")).rejects.toMatchObject({
-			code: "WARDEN_UNKNOWN_ABILITY",
+			code: "E_WARDEN_UNKNOWN_ABILITY",
 		});
 	});
 

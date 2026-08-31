@@ -591,7 +591,7 @@ export class Authenticator {
 	 * Authenticate by trying the given guards in order (default: the default
 	 * guard). Sets the user on the first success; throws `E_UNAUTHORIZED_ACCESS`
 	 * (401, carrying `redirectTo` for session guards) when all reject, or a
-	 * `WARDEN_AUTH_STRATEGY_ERROR` (500) when every attempted guard crashed.
+	 * `E_WARDEN_AUTH_STRATEGY_ERROR` (500) when every attempted guard crashed.
 	 */
 	async authenticateUsing(
 		guards?: string[],

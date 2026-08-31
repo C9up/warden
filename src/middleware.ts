@@ -256,7 +256,7 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 	// inline handlers use via `ctx.auth.authenticate()`), so the decorator path
 	// and the functional path share one code path. It sets `ctx.auth` and throws
 	// on failure — E_UNAUTHORIZED_ACCESS (401, credential rejection) or a
-	// WARDEN_AUTH_STRATEGY_ERROR (500, every attempted guard crashed).
+	// E_WARDEN_AUTH_STRATEGY_ERROR (500, every attempted guard crashed).
 	const authenticator = ensureAuthenticator(ctx, auth);
 	const loginRoute = await resolveLoginRoute(ctx);
 	try {
@@ -271,7 +271,7 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 		if (err instanceof WardenError && err.status === 500) {
 			ctx.response.status(500);
 			ctx.response.json({
-				error: { code: "AUTH_STRATEGY_ERROR", message: err.message },
+				error: { code: "E_WARDEN_AUTH_STRATEGY_ERROR", message: err.message },
 			});
 			return;
 		}
@@ -295,7 +295,9 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 		);
 		if (denied) {
 			ctx.response.status(403);
-			ctx.response.json({ error: { code: "FORBIDDEN", message: denied } });
+			ctx.response.json({
+				error: { code: "E_WARDEN_FORBIDDEN", message: denied },
+			});
 			return;
 		}
 
@@ -305,7 +307,7 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 			ctx.response.status(403);
 			ctx.response.json({
 				error: {
-					code: "MFA_REQUIRED",
+					code: "E_WARDEN_MFA_REQUIRED",
 					message: "Multi-factor authentication is required for this action.",
 				},
 			});
@@ -445,7 +447,7 @@ export interface BouncerRegistry {
  * from the authenticated user (`ctx.auth?.user`, or `null` for a guest), the
  * shared `RightsResolver`, and the registered abilities/policies, then attaches
  * it as `ctx.bouncer`. Handlers authorize via `await ctx.bouncer.authorize(...)`
- * (throws `WARDEN_AUTHORIZATION_FAILURE` carrying `status: 403`, which the host's
+ * (throws `AUTHORIZATION_FAILURE` carrying `status: 403`, which the host's
  * ExceptionHandler maps to a 403 response) or branch on `ctx.bouncer.allows(...)`.
  *
  * Unlike `wardenMiddleware` (a per-route GUARD that short-circuits public

@@ -90,7 +90,7 @@ describe("warden > @RequireMfa", () => {
 		await h.exec();
 		expect(h.response.status).toBe(403);
 		expect(h.response.body).toEqual({
-			error: { code: "MFA_REQUIRED", message: expect.any(String) },
+			error: { code: "E_WARDEN_MFA_REQUIRED", message: expect.any(String) },
 		});
 		expect(h.state.nextCalled).toBe(false);
 	});

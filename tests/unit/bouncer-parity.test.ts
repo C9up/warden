@@ -42,7 +42,7 @@ describe("warden > bouncer > parity (AC-E2)", () => {
 		expect((await bouncer.execute(deny)).authorized).toBe(false);
 		await expect(bouncer.authorize(allow)).resolves.toBeUndefined();
 		await expect(bouncer.authorize(deny)).rejects.toMatchObject({
-			code: "WARDEN_AUTHORIZATION_FAILURE",
+			code: "E_WARDEN_AUTHORIZATION_FAILURE",
 		});
 	});
 

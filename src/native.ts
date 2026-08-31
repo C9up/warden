@@ -2,7 +2,7 @@
  * Warden NAPI loader — loads the `warden-engine-napi` binary for Rust-native
  * JWT/HMAC/random operations. There is no TS fallback: when the binary is
  * absent, `nativeWarden()` returns `undefined` and `JwtStrategy` (and any
- * other consumer) throws `WARDEN_NAPI_REQUIRED` at use time. Password
+ * other consumer) throws `E_WARDEN_NAPI_REQUIRED` at use time. Password
  * hashing is the sole responsibility of `@c9up/sigil` (story 40.1).
  */
 import { createRequire } from "node:module";
@@ -38,7 +38,7 @@ try {
 		native = nodeRequire(join(currentDir, `../index.${suffix}.node`));
 	}
 } catch {
-	// Binary not available — JwtStrategy will throw WARDEN_NAPI_REQUIRED at use time.
+	// Binary not available — JwtStrategy will throw E_WARDEN_NAPI_REQUIRED at use time.
 }
 
 /** Whether the Rust NAPI engine loaded. */

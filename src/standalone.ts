@@ -107,7 +107,7 @@ export function createWarden(config: WardenConfig): Warden {
 						.status(401)
 						.json({
 							error: {
-								code: "UNAUTHORIZED",
+								code: "E_WARDEN_UNAUTHORIZED",
 								message: "Missing authentication token",
 							},
 						});
@@ -122,7 +122,7 @@ export function createWarden(config: WardenConfig): Warden {
 								.status(401)
 								.json({
 									error: {
-										code: "UNAUTHORIZED",
+										code: "E_WARDEN_UNAUTHORIZED",
 										message: result.error ?? "Authentication failed",
 									},
 								});
@@ -138,7 +138,7 @@ export function createWarden(config: WardenConfig): Warden {
 							.status(500)
 							.json({
 								error: {
-									code: "AUTH_ERROR",
+									code: "E_WARDEN_AUTH_ERROR",
 									message: "Internal authentication error",
 								},
 							});

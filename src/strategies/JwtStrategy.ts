@@ -34,7 +34,7 @@ function sign(payload: JwtClaims, secret: string): string {
 	const rust = nativeWarden();
 	if (!rust) {
 		throw new Error(
-			"[WARDEN_NAPI_REQUIRED] The Rust warden-engine binary is required. Build it with `cd packages/warden && pnpm build:napi`.",
+			"[E_WARDEN_NAPI_REQUIRED] The Rust warden-engine binary is required. Build it with `cd packages/warden && pnpm build:napi`.",
 		);
 	}
 	return rust.jwtSign(JSON.stringify(payload), secret);
@@ -44,7 +44,7 @@ function verify(token: string, secret: string): JwtClaims | null {
 	const rust = nativeWarden();
 	if (!rust) {
 		throw new Error(
-			"[WARDEN_NAPI_REQUIRED] The Rust warden-engine binary is required. Build it with `cd packages/warden && pnpm build:napi`.",
+			"[E_WARDEN_NAPI_REQUIRED] The Rust warden-engine binary is required. Build it with `cd packages/warden && pnpm build:napi`.",
 		);
 	}
 	try {

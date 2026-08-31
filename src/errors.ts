@@ -18,13 +18,17 @@ export class WardenError extends Error {
 	) {
 		super(message);
 		this.name = "WardenError";
-		// Warden's own codes carry the `WARDEN_` namespace. The AdonisJS auth
-		// identifiers (`E_UNAUTHORIZED_ACCESS`, `E_INVALID_CREDENTIALS`) are
-		// PRESERVED verbatim so the exposed `.code` matches Adonis exactly — a
-		// consumer branching on `error.code === 'E_UNAUTHORIZED_ACCESS'` (or a
-		// framework mapping the Adonis id) sees the same string it would under
-		// `@adonisjs/auth`. Documented deviation from the blanket prefix.
-		this.code = code.startsWith("E_") ? code : `WARDEN_${code}`;
+		// Warden's own codes are namespaced `E_WARDEN_`: `E_` because every
+		// framework code carries it, the package name because `E_FORBIDDEN`
+		// alone would mean three different things across the ecosystem and an
+		// application could not tell them apart.
+		//
+		// The AdonisJS auth identifiers (`E_UNAUTHORIZED_ACCESS`,
+		// `E_INVALID_CREDENTIALS`) are PRESERVED verbatim — they already start
+		// with `E_` and fall through untouched — so a consumer branching on
+		// `error.code === 'E_UNAUTHORIZED_ACCESS'` sees the same string it
+		// would under `@adonisjs/auth`.
+		this.code = code.startsWith("E_") ? code : `E_WARDEN_${code}`;
 		this.hint = options?.hint;
 		this.status = options?.status;
 	}

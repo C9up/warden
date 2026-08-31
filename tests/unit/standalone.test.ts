@@ -149,7 +149,10 @@ describe("warden > expressMiddleware", () => {
 
 		expect(out.captured.status).toBe(401);
 		expect(out.captured.body).toMatchObject({
-			error: { code: "UNAUTHORIZED", message: "Missing authentication token" },
+			error: {
+				code: "E_WARDEN_UNAUTHORIZED",
+				message: "Missing authentication token",
+			},
 		});
 		expect(out.nextCalled).toBe(false);
 	});
@@ -208,7 +211,7 @@ describe("warden > expressMiddleware", () => {
 		});
 		expect(out.captured.status).toBe(401);
 		expect(out.captured.body).toMatchObject({
-			error: { code: "UNAUTHORIZED" },
+			error: { code: "E_WARDEN_UNAUTHORIZED" },
 		});
 		expect(out.nextCalled).toBe(false);
 	});
