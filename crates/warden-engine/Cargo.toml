@@ -6,9 +6,9 @@ description = "Rust crypto engine for Warden — JWT, HMAC, constant-time compar
 
 [dependencies]
 base64 = "0.22"
-hmac = "0.12"
-sha2 = "0.10"
-rand = "0.8"
+hmac = "0.13"
+sha2 = "0.11"
+rand = "0.10"
 hex = "0.4"
 subtle = "2"
 serde = { version = "1", features = ["derive"] }
