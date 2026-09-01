@@ -178,13 +178,18 @@ export class AuthManager {
 		this.#emit(event, payload);
 	}
 
-	/** Fire-and-forget: an event listener must never break authentication. */
+	/**
+	 * Fire-and-forget: an event listener must never break authentication.
+	 *
+	 * The try/catch alone only caught a listener that threw SYNCHRONOUSLY. An
+	 * Adonis-shaped emitter returns a promise, and `void` on a rejected one is
+	 * an unhandled rejection — so an async listener that failed took the
+	 * process down instead of being the listener's problem.
+	 */
 	#emit(event: string, payload: Record<string, unknown>): void {
-		try {
-			void this.#emitter?.emit(event, payload);
-		} catch {
-			// A throwing listener is the listener's problem, not the login's.
-		}
+		void (async () => this.#emitter?.emit(event, payload))().catch(() => {
+			// A failing listener is the listener's problem, not the login's.
+		});
 	}
 
 	constructor(config: AuthConfig) {
