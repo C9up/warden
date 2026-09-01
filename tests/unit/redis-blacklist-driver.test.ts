@@ -78,3 +78,31 @@ describe("warden > RedisBlacklistDriver", () => {
 		await expect(driver.cleanup()).resolves.toBeUndefined();
 	});
 });
+
+describe("RedisBlacklistDriver > a transient connection failure", () => {
+	it("retries instead of caching the rejection forever", async () => {
+		// The in-flight slot was cleared inside `.then`, so a REJECTED promise
+		// stayed in it and every later call handed back that same rejection. For
+		// a revocation store that means one refused connection at boot leaves
+		// every later check failing for the life of the process — a revoked
+		// token that can never be found revoked.
+		let attempts = 0;
+		const resolver = vi.fn(async () => {
+			attempts += 1;
+			if (attempts === 1) throw new Error("ECONNREFUSED");
+			return new FakeRedis();
+		});
+		const driver = new RedisBlacklistDriver(resolver);
+
+		await expect(driver.has("jti-1")).rejects.toThrow("ECONNREFUSED");
+		// The second call must reach the resolver again rather than replay the
+		// first one's rejection.
+		await expect(driver.has("jti-1")).resolves.toBe(false);
+		expect(attempts).toBe(2);
+
+		// …and once connected, the client is memoised as before.
+		await driver.add("jti-1", Date.now() + 60_000);
+		expect(await driver.has("jti-1")).toBe(true);
+		expect(attempts).toBe(2);
+	});
+});
