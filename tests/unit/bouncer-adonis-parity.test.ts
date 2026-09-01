@@ -330,3 +330,48 @@ describe("warden > PolicyAuthorizer.setEmitter (AdonisJS parity)", () => {
 		);
 	});
 });
+
+describe("bouncer > an Adonis-shaped emitter whose listener rejects", () => {
+	it("still returns the decision, and reports rather than ending the process", async () => {
+		// `@adonisjs/events` declares `emit(): Promise<void>` and rethrows when a
+		// listener fails and no error handler is registered. An authorization
+		// event is an audit trail, not a participant in the decision — nobody
+		// awaits it — so that rejection had nowhere to go. The interface said
+		// `void`, which accepts a promise-returning function, so the call site
+		// read as if there were nothing to handle.
+		const written: string[] = [];
+		const rejections: unknown[] = [];
+		const originalWrite = process.stderr.write.bind(process.stderr);
+		const onUnhandled = (reason: unknown): void => {
+			rejections.push(reason);
+		};
+		process.stderr.write = (chunk: string | Uint8Array): boolean => {
+			written.push(String(chunk));
+			return true;
+		};
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const emitter = {
+				emit: async () => {
+					throw new Error("the audit logger blew up");
+				},
+			};
+			const bouncer = new Bouncer(
+				{ id: "u1" },
+				{ editPost: Bouncer.ability(() => true) },
+				undefined,
+				{ emitter },
+			);
+
+			// The decision itself must be unaffected.
+			expect(await bouncer.allows("editPost")).toBe(true);
+			await new Promise((resolve) => setTimeout(resolve, 15));
+
+			expect(rejections).toEqual([]);
+			expect(written.join("")).toContain("audit logger blew up");
+		} finally {
+			process.stderr.write = originalWrite;
+			process.off("unhandledRejection", onUnhandled);
+		}
+	});
+});

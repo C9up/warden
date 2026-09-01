@@ -29,7 +29,16 @@ export interface PolicyContainerResolver {
  * them to say WHICH resource was refused. No-op when absent.
  */
 export interface BouncerEmitter {
-	emit(event: string, payload: unknown): void;
+	/**
+	 * `unknown`, not `void`. `@adonisjs/events` declares
+	 * `emit(): Promise<void>` and rethrows when a listener fails and no error
+	 * handler is registered — and a `void` return type ACCEPTS a
+	 * promise-returning function, so a call site reads as if there were
+	 * nothing to handle. That is how an authorization listener's rejection
+	 * went unnoticed. Duck-typed, so it stays wider than Adonis's own class:
+	 * a Node EventEmitter returns boolean.
+	 */
+	emit(event: string, payload: unknown): unknown;
 }
 
 /**

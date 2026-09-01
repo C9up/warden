@@ -18,6 +18,7 @@ import type { EffectivePermissions, Scope } from "../rights/types.js";
 import { AbilitiesBuilder } from "./AbilitiesBuilder.js";
 import { AuthorizationResponse } from "./AuthorizationResponse.js";
 import type { BasePolicy } from "./BasePolicy.js";
+import { emitSafely } from "./emitSafely.js";
 import {
 	defaultResponseBuilder,
 	evaluate,
@@ -271,7 +272,7 @@ export class Bouncer {
 		response: AuthorizationResponse,
 		parameters: unknown[],
 	): void {
-		this.#emitter?.emit("authorization:finished", {
+		emitSafely(this.#emitter, "authorization:finished", {
 			user: this.#getUser(),
 			action,
 			// What the check was ABOUT. AdonisJS carries it, and without it an

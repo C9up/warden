@@ -12,6 +12,7 @@ import type { EffectivePermissions, Scope } from "../rights/types.js";
 import type { AuthorizationResponse } from "./AuthorizationResponse.js";
 import { BasePolicy } from "./BasePolicy.js";
 import { getActionMetadata } from "./decorators.js";
+import { emitSafely } from "./emitSafely.js";
 import {
 	type Action,
 	evaluate,
@@ -112,7 +113,7 @@ export class PolicyAuthorizer {
 			after: policy.after?.bind(policy),
 			responseBuilder: this.#responseBuilder,
 		});
-		this.#emitter?.emit("authorization:finished", {
+		emitSafely(this.#emitter, "authorization:finished", {
 			user: this.#user,
 			action,
 			// Same payload as an ability check: which resource the decision was
