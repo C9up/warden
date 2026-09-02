@@ -9,8 +9,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 warden-engine = { path = "../warden-engine" }
-napi = { version = "2", features = ["napi4"] }
-napi-derive = { version = "2", features = ["type-def"] }
+napi = { version = "3", features = ["napi4"] }
+napi-derive = { version = "3", features = ["type-def"] }
 
 [build-dependencies]
 napi-build = "2"
