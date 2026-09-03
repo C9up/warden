@@ -35,11 +35,17 @@ declare module "@c9up/ream/types" {
 
 	interface ContainerBindings {
 		/** The auth manager, bound by `WardenProvider`. */
-		auth: AuthManager;
+		"warden.auth": AuthManager;
 		/**
-		 * The MFA manager — bound only when `config.mfa.manager` is set, the
-		 * same way any optional binding is. Resolving it without that config
-		 * throws, as it did before it had a type.
+		 * The same binding under the name it had before the token carried its
+		 * package. Kept bound so an existing `container.make(...)` resolves.
+		 */
+		auth: AuthManager;
+		/** The MFA manager — bound only when `config.mfa.manager` is set. */
+		"warden.mfa": MfaManager;
+		/**
+		 * The same binding under the name it had before the token carried its
+		 * package. Kept bound so an existing `container.make(...)` resolves.
 		 */
 		mfa: MfaManager;
 	}

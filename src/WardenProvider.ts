@@ -136,9 +136,17 @@ export default class WardenProvider {
 		// (events → "bus", rosetta → "i18n"). Without this, Station's
 		// `container.resolve("auth")` threw and its admin auth gate
 		// silently fell back to open-mode.
-		this.app.container.singleton("auth", () =>
-			this.app.container.resolve(AuthManager),
-		);
+		// Namespaced by the package that owns it, the way upstream namespaces
+		// `lucid.db`, `auth.manager` and `drive.manager` by theirs. The bare
+		// token stays bound beside it: it is what every existing
+		// `container.make(...)` asks for, and a token is not worth breaking an
+		// application over.
+		// The host container is duck-typed here, so the factory answers
+		// `unknown`; what `container.make('warden.auth')` hands back is typed by
+		// the augmentation, not by this call.
+		const auth = (): unknown => this.app.container.resolve(AuthManager);
+		this.app.container.singleton("warden.auth", auth);
+		this.app.container.singleton("auth", auth);
 
 		// MFA (optional): the app builds an MfaManager with its persistent stores
 		// + providers and passes it via config.mfa. Registered by class and under
@@ -147,6 +155,7 @@ export default class WardenProvider {
 		const mfa = config.mfa?.manager;
 		if (mfa) {
 			this.app.container.singleton(MfaManager, () => mfa);
+			this.app.container.singleton("warden.mfa", () => mfa);
 			this.app.container.singleton("mfa", () => mfa);
 		}
 	}
