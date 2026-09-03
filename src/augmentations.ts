@@ -1,5 +1,13 @@
 /**
- * Teach ream's `Authenticators` interface what `ctx.auth.use(name)` returns.
+ * Teach ream's `Authenticators` and `ContainerBindings` interfaces what warden
+ * puts in them.
+ *
+ * `Authenticators` says what `ctx.auth.use(name)` returns; `ContainerBindings`
+ * says what `container.make('auth')` returns. Only the first was filled in —
+ * ream's own comment on `ContainerBindings` names `auth` (warden) as reaching
+ * it by augmentation from here, and nothing did, so resolving by the string
+ * token answered `unknown` and every call site had to assert a type it could
+ * not prove.
  *
  * ream declares that interface empty on purpose — it owns no auth package, so
  * it cannot know an application's guards, and `use()` falls back to `unknown`
@@ -17,9 +25,22 @@
 // Referenced so the augmentation below resolves the module it augments.
 import type {} from "@c9up/ream/types";
 import type { GuardAccessor } from "./Authenticator.js";
+import type { AuthManager } from "./AuthManager.js";
+import type { MfaManager } from "./mfa/MfaManager.js";
 
 declare module "@c9up/ream/types" {
 	interface Authenticators {
 		[guardName: string]: GuardAccessor;
+	}
+
+	interface ContainerBindings {
+		/** The auth manager, bound by `WardenProvider`. */
+		auth: AuthManager;
+		/**
+		 * The MFA manager — bound only when `config.mfa.manager` is set, the
+		 * same way any optional binding is. Resolving it without that config
+		 * throws, as it did before it had a type.
+		 */
+		mfa: MfaManager;
 	}
 }

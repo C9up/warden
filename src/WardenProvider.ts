@@ -1,3 +1,4 @@
+import "./augmentations.js";
 import { AuthManager, type AuthStrategy } from "./AuthManager.js";
 import type { WardenConfig } from "./config.js";
 import { WardenError } from "./errors.js";
