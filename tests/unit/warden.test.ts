@@ -22,7 +22,6 @@ function defined<T>(value: T | null | undefined): T {
 	return value;
 }
 
-
 // === Mock strategies ===
 
 const mockJwtStrategy: AuthStrategy = {

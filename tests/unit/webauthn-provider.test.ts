@@ -20,7 +20,6 @@ import {
 	WebauthnProvider,
 } from "../../src/mfa/WebauthnProvider.js";
 
-
 const RP_ID = "fluveo.ch";
 const ORIGIN = "https://fluveo.ch";
 

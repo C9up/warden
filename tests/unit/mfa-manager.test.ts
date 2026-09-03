@@ -13,7 +13,6 @@ function defined<T>(value: T | null | undefined): T {
 	return value;
 }
 
-
 function manager(): MfaManager {
 	return new MfaManager({
 		issuer: "Fluveo",

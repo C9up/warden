@@ -29,7 +29,6 @@ function defined<T>(value: T | null | undefined): T {
 	return value;
 }
 
-
 const okUser: UserPayload = { id: "u1", roles: ["admin"] };
 
 /** jwt guard that authenticates exactly the token "good". */
@@ -607,7 +606,9 @@ describe("warden > keep me signed in, end to end", () => {
 
 		// The cookie IS the credential — anyone who reads it can present it.
 		expect(cookies.jar.remember_web).toBeTruthy();
-		expect(JSON.parse(defined(cookies.jar["remember_web::options"]))).toMatchObject({
+		expect(
+			JSON.parse(defined(cookies.jar["remember_web::options"])),
+		).toMatchObject({
 			httpOnly: true,
 			maxAge: 3600,
 		});
