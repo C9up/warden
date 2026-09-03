@@ -7,6 +7,13 @@ import { BackupCodesProvider } from "../../src/mfa/BackupCodesProvider.js";
 import { MfaManager } from "../../src/mfa/MfaManager.js";
 import { TotpProvider } from "../../src/mfa/TotpProvider.js";
 
+/** Narrow away null/undefined without a `!` assertion (which lies to the compiler). */
+function defined<T>(value: T | null | undefined): T {
+	if (value == null) throw new Error("expected a defined value");
+	return value;
+}
+
+
 function manager(): MfaManager {
 	return new MfaManager({
 		issuer: "Fluveo",
@@ -73,14 +80,14 @@ describe("warden > MfaManager — backup codes", () => {
 		const codes = await m.createBackupCodes(USER.id);
 		expect(codes).toHaveLength(5);
 
-		expect(await m.verifyBackupCode(USER.id, codes[0])).toBe(true);
+		expect(await m.verifyBackupCode(USER.id, defined(codes[0]))).toBe(true);
 		// Consumed.
-		expect(await m.verifyBackupCode(USER.id, codes[0])).toBe(false);
+		expect(await m.verifyBackupCode(USER.id, defined(codes[0]))).toBe(false);
 
 		// Regenerate replaces: the remaining old codes stop working.
 		const fresh = await m.createBackupCodes(USER.id);
-		expect(await m.verifyBackupCode(USER.id, codes[1])).toBe(false);
-		expect(await m.verifyBackupCode(USER.id, fresh[0])).toBe(true);
+		expect(await m.verifyBackupCode(USER.id, defined(codes[1]))).toBe(false);
+		expect(await m.verifyBackupCode(USER.id, defined(fresh[0]))).toBe(true);
 
 		const summaries = await m.listFactors(USER.id);
 		expect(summaries.filter((s) => s.kind === "backup_codes")).toHaveLength(1);
@@ -98,14 +105,14 @@ describe("warden > MfaManager — unified verify & status", () => {
 
 		nextTimeStep();
 		expect(await m.verify(USER.id, totp.generate(secret))).toBe(true);
-		expect(await m.verify(USER.id, codes[2])).toBe(true);
+		expect(await m.verify(USER.id, defined(codes[2]))).toBe(true);
 		expect(await m.verify(USER.id, "999999")).toBe(false);
 	});
 
 	it("listFactors never leaks secrets, and disableFactor removes it", async () => {
 		const m = manager();
 		const { factorId } = await m.enrollTotp(USER, "Yubikey");
-		const [factor] = await m.listFactors(USER.id);
+		const factor = defined((await m.listFactors(USER.id))[0]);
 		expect(factor).toEqual({
 			id: factorId,
 			kind: "totp",

@@ -5,6 +5,13 @@
 import { describe, expect, it } from "vitest";
 import { BackupCodesProvider } from "../../src/mfa/BackupCodesProvider.js";
 
+/** Narrow away null/undefined without a `!` assertion (which lies to the compiler). */
+function defined<T>(value: T | null | undefined): T {
+	if (value == null) throw new Error("expected a defined value");
+	return value;
+}
+
+
 describe("warden > BackupCodesProvider", () => {
 	it("generates the configured number of codes and matching hashes", () => {
 		const p = new BackupCodesProvider({ count: 8 });
@@ -20,17 +27,17 @@ describe("warden > BackupCodesProvider", () => {
 		const p = new BackupCodesProvider({ count: 5 });
 		const { codes, hashes } = p.generate();
 
-		const first = p.verify(hashes, codes[2]);
+		const first = p.verify(hashes, defined(codes[2]));
 		expect(first.ok).toBe(true);
 		expect(first.remaining).toHaveLength(4);
 
 		// The consumed code no longer verifies against the trimmed list.
-		const reuse = p.verify(first.remaining, codes[2]);
+		const reuse = p.verify(first.remaining, defined(codes[2]));
 		expect(reuse.ok).toBe(false);
 		expect(reuse.remaining).toHaveLength(4);
 
 		// A different code still works against the trimmed list.
-		const other = p.verify(first.remaining, codes[0]);
+		const other = p.verify(first.remaining, defined(codes[0]));
 		expect(other.ok).toBe(true);
 		expect(other.remaining).toHaveLength(3);
 	});
@@ -38,7 +45,7 @@ describe("warden > BackupCodesProvider", () => {
 	it("accepts codes regardless of separators and case", () => {
 		const p = new BackupCodesProvider({ count: 3 });
 		const { codes, hashes } = p.generate();
-		const messy = codes[1].replace("-", "").toLowerCase();
+		const messy = defined(codes[1]).replace("-", "").toLowerCase();
 		expect(p.verify(hashes, messy).ok).toBe(true);
 	});
 

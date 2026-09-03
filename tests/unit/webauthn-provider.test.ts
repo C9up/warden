@@ -20,6 +20,7 @@ import {
 	WebauthnProvider,
 } from "../../src/mfa/WebauthnProvider.js";
 
+
 const RP_ID = "fluveo.ch";
 const ORIGIN = "https://fluveo.ch";
 
@@ -200,7 +201,7 @@ describe("warden > WebauthnProvider — options", () => {
 
 		const { options } = await p.startAuthentication(USER.id);
 		expect(options.allowCredentials).toHaveLength(1);
-		expect(options.allowCredentials?.[0].id).toBe(b64url(auth.credentialId));
+		expect(options.allowCredentials?.[0]?.id).toBe(b64url(auth.credentialId));
 	});
 });
 
@@ -285,7 +286,7 @@ describe("warden > WebauthnProvider — authentication", () => {
 		const assertion = auth.authenticate(options.challenge, 1);
 		// Flip a byte in the signature.
 		const sig = Buffer.from(assertion.response.signature, "base64url");
-		sig[sig.length - 1] ^= 0xff;
+		sig.writeUInt8(sig.readUInt8(sig.length - 1) ^ 0xff, sig.length - 1);
 		assertion.response.signature = sig.toString("base64url");
 		const res = await p.finishAuthentication(state, assertion);
 		expect(res.verified).toBe(false);

@@ -79,8 +79,8 @@ export class BackupCodesProvider {
 		const candidate = normalize(code);
 		let matchedIndex = -1;
 		// Scan every entry (no early exit) so timing doesn't leak position.
-		for (let i = 0; i < hashes.length; i++) {
-			if (matchesStored(hashes[i], candidate)) {
+		for (const [i, stored] of hashes.entries()) {
+			if (matchesStored(stored, candidate)) {
 				matchedIndex = i;
 			}
 		}

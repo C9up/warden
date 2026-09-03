@@ -73,15 +73,20 @@ export function decodeCbor(buf: Buffer, start = 0, depth = 0): Decoded {
 	if (start < 0 || start >= buf.length) {
 		throw new Error("CBOR: item starts past the end of the buffer");
 	}
-	const major = buf[start] >> 5;
-	const info = buf[start] & 0x1f;
+	// `start` was bounds-checked against the buffer just above; naming the
+	// byte is what carries that check into the reads below.
+	const head = buf[start];
+	if (head === undefined)
+		throw new Error("CBOR: item starts past the end of the buffer");
+	const major = head >> 5;
+	const info = head & 0x1f;
 	let len: number;
 	let p = start + 1;
 	if (info < 24) {
 		len = info;
 	} else if (info === 24) {
 		if (p >= buf.length) throw new Error("CBOR: truncated length");
-		len = buf[p];
+		len = buf.readUInt8(p);
 		p += 1;
 	} else if (info === 25) {
 		if (p + 2 > buf.length) throw new Error("CBOR: truncated length");
@@ -183,7 +188,9 @@ export function parseAuthenticatorData(authData: Buffer): AuthenticatorData {
 	if (authData.length < 37) {
 		throw new Error("authenticatorData is too short");
 	}
-	const flagsByte = authData[32];
+	// The length check above guarantees byte 32; `readUInt8` bounds-checks it
+	// again rather than reading it as a byte that might not be there.
+	const flagsByte = authData.readUInt8(32);
 	const flags = {
 		up: (flagsByte & 0x01) !== 0,
 		uv: (flagsByte & 0x04) !== 0,

@@ -14,7 +14,9 @@ class CapturingChannel implements OtpDeliveryChannel {
 		this.sent.push({ recipient, code });
 	}
 	last(): string {
-		return this.sent[this.sent.length - 1].code;
+		const last = this.sent.at(-1);
+		if (last === undefined) throw new Error("no code was sent");
+		return last.code;
 	}
 }
 
@@ -41,7 +43,7 @@ describe("warden > OtpProvider", () => {
 
 		const { challengeId } = await otp.start("k@c9up.com");
 		expect(channel.sent).toHaveLength(1);
-		expect(channel.sent[0].recipient).toBe("k@c9up.com");
+		expect(channel.sent[0]?.recipient).toBe("k@c9up.com");
 		expect(channel.last()).toMatch(/^\d{6}$/);
 
 		expect(await otp.verify(challengeId, channel.last())).toEqual({ ok: true });

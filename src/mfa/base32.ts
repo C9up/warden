@@ -5,8 +5,8 @@
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const CHAR_TO_VAL: Record<string, number> = {};
-for (let i = 0; i < ALPHABET.length; i++) {
-	CHAR_TO_VAL[ALPHABET[i]] = i;
+for (const [i, char] of [...ALPHABET].entries()) {
+	CHAR_TO_VAL[char] = i;
 }
 
 /** Encode bytes to an unpadded, uppercase base32 string. */

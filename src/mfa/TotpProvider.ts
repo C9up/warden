@@ -201,12 +201,12 @@ export class TotpProvider {
 		const hmac = createHmac(this.#cfg.algorithm.toLowerCase(), Buffer.from(key))
 			.update(buf)
 			.digest();
-		const off = hmac[hmac.length - 1] & 0xf;
-		const bin =
-			((hmac[off] & 0x7f) << 24) |
-			((hmac[off + 1] & 0xff) << 16) |
-			((hmac[off + 2] & 0xff) << 8) |
-			(hmac[off + 3] & 0xff);
+		// RFC 4226 dynamic truncation. `readUInt32BE` reads the four bytes as
+		// one value and bounds-checks itself, where four indexed reads each
+		// came back "a byte, or nothing" — the digest is 20 bytes and the
+		// offset is masked to 0-15, so the window always fits.
+		const off = (hmac.at(-1) ?? 0) & 0xf;
+		const bin = hmac.readUInt32BE(off) & 0x7fffffff;
 		return (bin % 10 ** this.#cfg.digits)
 			.toString()
 			.padStart(this.#cfg.digits, "0");

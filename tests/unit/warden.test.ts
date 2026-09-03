@@ -16,6 +16,13 @@ import {
 	TokenBlacklist,
 } from "../../src/index.js";
 
+/** Narrow away null/undefined without a `!` assertion (which lies to the compiler). */
+function defined<T>(value: T | null | undefined): T {
+	if (value == null) throw new Error("expected a defined value");
+	return value;
+}
+
+
 // === Mock strategies ===
 
 const mockJwtStrategy: AuthStrategy = {
@@ -449,7 +456,7 @@ describe("warden > security hardening", () => {
 		const t2 = jwt.signToken({ id: "u1" });
 		const decode = (jwt: string) =>
 			JSON.parse(
-				Buffer.from(jwt.split(".")[1], "base64url").toString("utf8"),
+				Buffer.from(defined(jwt.split(".")[1]), "base64url").toString("utf8"),
 			) as { jti: string };
 		const j1 = decode(t1).jti;
 		const j2 = decode(t2).jti;
@@ -483,7 +490,7 @@ describe("warden > security hardening", () => {
 
 describe("warden > AuthManager.issueFor", () => {
 	function claims(token: string): Record<string, unknown> {
-		const part = token.split(".")[1];
+		const part = defined(token.split(".")[1]);
 		return JSON.parse(Buffer.from(part, "base64url").toString());
 	}
 

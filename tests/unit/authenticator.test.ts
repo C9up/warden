@@ -23,6 +23,13 @@ import {
 	SessionStrategy,
 } from "../../src/strategies/SessionStrategy.js";
 
+/** Narrow away null/undefined without a `!` assertion (which lies to the compiler). */
+function defined<T>(value: T | null | undefined): T {
+	if (value == null) throw new Error("expected a defined value");
+	return value;
+}
+
+
 const okUser: UserPayload = { id: "u1", roles: ["admin"] };
 
 /** jwt guard that authenticates exactly the token "good". */
@@ -600,7 +607,7 @@ describe("warden > keep me signed in, end to end", () => {
 
 		// The cookie IS the credential — anyone who reads it can present it.
 		expect(cookies.jar.remember_web).toBeTruthy();
-		expect(JSON.parse(cookies.jar["remember_web::options"])).toMatchObject({
+		expect(JSON.parse(defined(cookies.jar["remember_web::options"]))).toMatchObject({
 			httpOnly: true,
 			maxAge: 3600,
 		});
@@ -643,7 +650,7 @@ describe("warden > keep me signed in, end to end", () => {
 		await new Authenticator(ctxWith(manager, cookies, fakeSession()), manager)
 			.use("web")
 			.login(okUser, true);
-		const stolen = cookies.jar.remember_web;
+		const stolen = defined(cookies.jar.remember_web);
 
 		await new Authenticator(
 			ctxWith(manager, cookies, fakeSession()),

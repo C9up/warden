@@ -9,6 +9,13 @@ import {
 	type RedisLikeClient,
 } from "../../src/RedisBlacklistDriver.js";
 
+/** Narrow away null/undefined without a `!` assertion (which lies to the compiler). */
+function defined<T>(value: T | null | undefined): T {
+	if (value == null) throw new Error("expected a defined value");
+	return value;
+}
+
+
 class FakeRedis implements RedisLikeClient {
 	store = new Map<string, { value: string; expireAt: number }>();
 	async set(
@@ -48,7 +55,7 @@ describe("warden > RedisBlacklistDriver", () => {
 		const driver = new RedisBlacklistDriver(redis);
 		await driver.add("jti-2", Date.now() + 120_000);
 
-		const [, , mode, ttl] = spy.mock.calls[0];
+		const [, , mode, ttl] = defined(spy.mock.calls[0]);
 		expect(mode).toBe("EX");
 		expect(ttl).toBeGreaterThan(118);
 		expect(ttl).toBeLessThanOrEqual(120);
