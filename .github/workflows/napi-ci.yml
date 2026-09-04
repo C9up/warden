@@ -79,6 +79,10 @@ jobs:
           node-version: '22'
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm exec tsc -p tsconfig.build.json --noEmit
+      # And the tests: `tsconfig.build.json` leaves them out, so every type a
+      # test relies on went ungated until this step ran the project's own
+      # `tsconfig.json`, which includes them.
+      - run: pnpm typecheck
       - run: pnpm lint
   # 5-platform NAPI matrix (Story 52.1). warden is fully self-contained: its
   # runtime and test suite have zero @c9up dependencies, so it builds and
@@ -132,7 +136,7 @@ jobs:
 
       - name: Vitest (JSON reporter)
         if: matrix.test
-        run: pnpm exec vitest run --reporter=default --reporter=json --outputFile=test-results.json
+        run: pnpm exec vitest run --coverage --reporter=default --reporter=json --outputFile=test-results.json
         shell: bash
 
       - name: Smoke gate — tests ran AND zero skipped (Linux/macOS)
@@ -236,7 +240,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm build:napi
-      - run: pnpm exec vitest run
+      - run: pnpm exec vitest run --coverage
 
   # Publish job — gated on workflow_dispatch (manual maintainer trigger).
   # Requires NPM_TOKEN secret + a v<MAJOR>.<MINOR>.<PATCH> tag at HEAD matching
