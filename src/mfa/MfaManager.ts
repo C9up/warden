@@ -133,7 +133,7 @@ export class MfaManager {
 	async confirmTotp(factorId: string, code: string): Promise<boolean> {
 		const totp = this.#requireTotp();
 		const factor = await this.#store.findById(factorId);
-		if (!factor || factor.kind !== "totp" || !factor.secret) {
+		if (factor?.kind !== "totp" || !factor.secret) {
 			return false;
 		}
 		if (!(await totp.verify(factor.secret, code))) {
