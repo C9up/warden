@@ -6,7 +6,7 @@ import { MfaManager } from "./mfa/MfaManager.js";
 import type { BouncerRegistry } from "./middleware.js";
 import { MemoryRightsStore } from "./rights/MemoryRightsStore.js";
 import { RightsResolver } from "./rights/RightsResolver.js";
-import { setAuth } from "./services/main.js";
+import { clearAuth, getAuth, setAuth } from "./services/main.js";
 import { ApiKeyStrategy } from "./strategies/ApiKeyStrategy.js";
 import { JwtStrategy } from "./strategies/JwtStrategy.js";
 import { SessionStrategy } from "./strategies/SessionStrategy.js";
@@ -26,6 +26,9 @@ export interface WardenAppContext {
 }
 
 export default class WardenProvider {
+	/** The manager this provider installed, so shutdown only clears its own. */
+	#auth: AuthManager | undefined;
+
 	constructor(protected app: WardenAppContext) {}
 
 	register() {
@@ -162,8 +165,21 @@ export default class WardenProvider {
 
 	async boot() {
 		const manager = await this.app.container.resolve(AuthManager);
-		if (manager instanceof AuthManager) setAuth(manager);
+		if (manager instanceof AuthManager) {
+			this.#auth = manager;
+			setAuth(manager);
+		}
 		await this.#registerTemplateTags();
+	}
+
+	async shutdown() {
+		// Release the module-level singleton, but only while it is still ours.
+		// A stopped application left a dead AuthManager reachable through
+		// `import auth from '@c9up/warden/services/main'`; and with two
+		// applications in one process, clearing unconditionally would take the
+		// survivor's auth down with it.
+		if (this.#auth !== undefined && getAuth() === this.#auth) clearAuth();
+		this.#auth = undefined;
 	}
 
 	/**

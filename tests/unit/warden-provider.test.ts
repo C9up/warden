@@ -250,3 +250,43 @@ describe("warden > WardenProvider", () => {
 		);
 	});
 });
+
+describe("warden > provider > shutdown", () => {
+	it("releases the services/main singleton it installed", async () => {
+		const { getAuth } = await import("../../src/services/main.js");
+		const { app } = makeFakeApp({ jwt: validJwtConfig });
+		const provider = new WardenProvider(app);
+		provider.register();
+		await provider.boot();
+		expect(getAuth()).toBeInstanceOf(AuthManager);
+
+		await provider.shutdown();
+
+		// A stopped application left a live AuthManager reachable through
+		// `import auth from '@c9up/warden/services/main'` — every guard reading
+		// it would have been authenticating against a torn-down application.
+		expect(getAuth()).toBeUndefined();
+	});
+
+	it("leaves a manager another application has since installed alone", async () => {
+		const { getAuth } = await import("../../src/services/main.js");
+		const { app } = makeFakeApp({ jwt: validJwtConfig });
+		const provider = new WardenProvider(app);
+		provider.register();
+		await provider.boot();
+
+		// A second application boots in the same process and takes the singleton
+		// over; the first one then shuts down.
+		const second = makeFakeApp({ jwt: validJwtConfig });
+		const other = new WardenProvider(second.app);
+		other.register();
+		await other.boot();
+		const replacement = getAuth();
+		if (!replacement) throw new Error("expected the second boot to bind one");
+
+		await provider.shutdown();
+
+		// Clearing unconditionally would take the survivor's auth down with it.
+		expect(getAuth()).toBe(replacement);
+	});
+});

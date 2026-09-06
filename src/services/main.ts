@@ -24,6 +24,19 @@ export function getAuth(): AuthManager | undefined {
 	return instance;
 }
 
+/**
+ * @internal Release the singleton, so a shut-down application does not leave a
+ * dead AuthManager reachable through `services/main`.
+ *
+ * The caller checks ownership first (`getAuth() === mine`). Two applications in
+ * one process share this module, and the one shutting down must not clear a
+ * manager the other has since installed — for auth, that would leave the
+ * survivor authenticating against nothing, or throwing on every guarded route.
+ */
+export function clearAuth(): void {
+	instance = undefined;
+}
+
 const auth: AuthManager = new Proxy({} as AuthManager, {
 	get(_target, prop) {
 		if (!instance) {
