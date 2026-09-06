@@ -1,4 +1,4 @@
-name: warden-napi-ci
+name: warden-ci
 
 on:
   push:
