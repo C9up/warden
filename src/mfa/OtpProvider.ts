@@ -31,11 +31,34 @@ export interface OtpChallenge {
 	attempts: number;
 }
 
-/** Storage for pending challenges. */
+/**
+ * Storage for pending challenges.
+ *
+ * {@link take} is what makes a one-time code one-time. Verification used to be
+ * `find` then compare then `delete` — three operations with `await` between
+ * them — so two requests carrying the same correct code both read the challenge
+ * before either removed it, and both were told `ok`. The attempt budget had the
+ * same shape: concurrent wrong guesses each read `attempts: 0` and wrote `1`,
+ * so twenty of them burned one attempt. A store backed by a network widens that
+ * window from microseconds to a round trip.
+ *
+ * A custom store MUST implement `take` as a single indivisible operation:
+ * `DELETE ... RETURNING` on SQL, `GETDEL` or a Lua script on Redis, a
+ * compare-and-set on anything else. Handing back a copy and deleting separately
+ * reopens the hole this exists to close.
+ */
 export interface OtpChallengeStore {
 	save(challenge: OtpChallenge): Promise<void>;
 	find(id: string): Promise<OtpChallenge | null>;
 	delete(id: string): Promise<void>;
+	/**
+	 * Atomically remove the challenge and return what was removed.
+	 *
+	 * At most one concurrent caller can be handed a given challenge; every
+	 * other gets `null`. Whoever holds it decides what happens next — spend it,
+	 * or put it back with one more attempt recorded.
+	 */
+	take(id: string): Promise<OtpChallenge | null>;
 }
 
 export class MemoryOtpChallengeStore implements OtpChallengeStore {
@@ -48,6 +71,17 @@ export class MemoryOtpChallengeStore implements OtpChallengeStore {
 	}
 	async delete(id: string): Promise<void> {
 		this.#store.delete(id);
+	}
+	/**
+	 * Atomic here for free: a synchronous read-and-remove with no `await`
+	 * between the two cannot be interleaved on a single-threaded runtime.
+	 * Written as one statement pair on purpose — adding an `await` inside would
+	 * silently reintroduce the race.
+	 */
+	async take(id: string): Promise<OtpChallenge | null> {
+		const challenge = this.#store.get(id) ?? null;
+		this.#store.delete(id);
+		return challenge;
 	}
 }
 
@@ -157,23 +191,27 @@ export class OtpProvider {
 		code: string,
 		nowMs: number = Date.now(),
 	): Promise<OtpVerification> {
-		const challenge = await this.#store.find(challengeId);
+		// TAKE, do not read. The challenge leaves the store before anything is
+		// compared, so a second request racing this one finds nothing and is
+		// refused — whatever the outcome here. Every path below either keeps it
+		// removed or puts it back deliberately.
+		const challenge = await this.#store.take(challengeId);
 		if (!challenge) {
 			return { ok: false, reason: "not_found" };
 		}
 		if (nowMs > challenge.expiresAt) {
-			await this.#store.delete(challengeId);
 			return { ok: false, reason: "expired" };
 		}
 		if (matchesStored(challenge.hash, code.replace(/\s/g, ""))) {
-			await this.#store.delete(challengeId);
 			return { ok: true };
 		}
 		const attempts = challenge.attempts + 1;
 		if (attempts >= this.#maxAttempts) {
-			await this.#store.delete(challengeId);
 			return { ok: false, reason: "too_many_attempts" };
 		}
+		// Wrong, but budget remains: put it back with the attempt recorded.
+		// Holding it for the length of the comparison is also what makes the
+		// counter reliable — no two callers can be incrementing the same value.
 		await this.#store.save({ ...challenge, attempts });
 		return { ok: false, reason: "mismatch" };
 	}
