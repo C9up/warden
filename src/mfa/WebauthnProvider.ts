@@ -128,8 +128,29 @@ export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
 		this.#ttlMs = ttlMs;
 	}
 
+	/**
+	 * Size at which the next sweep runs, doubling each time.
+	 *
+	 * Entries only ever left when their state was reused or taken, so a
+	 * ceremony nobody finished — a passkey prompt dismissed, which happens all
+	 * day — stayed for the life of the process. Sweeping on write bounds it
+	 * without a timer, which would hold the event loop open and need a disposal
+	 * contract this store does not have.
+	 */
+	#sweepAt = 64;
+
 	async save(state: string, challenge: string): Promise<void> {
 		this.#store.set(state, { challenge, expiresAt: Date.now() + this.#ttlMs });
+		if (this.#store.size > this.#sweepAt) this.#sweep();
+	}
+
+	/** Drop everything already expired. */
+	#sweep(): void {
+		const now = Date.now();
+		for (const [state, entry] of this.#store) {
+			if (entry.expiresAt < now) this.#store.delete(state);
+		}
+		this.#sweepAt = Math.max(64, this.#store.size * 2);
 	}
 	async take(state: string): Promise<string | null> {
 		const entry = this.#store.get(state);

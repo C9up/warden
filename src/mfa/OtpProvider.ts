@@ -63,8 +63,32 @@ export interface OtpChallengeStore {
 
 export class MemoryOtpChallengeStore implements OtpChallengeStore {
 	#store = new Map<string, OtpChallenge>();
+	/**
+	 * Size at which the next sweep runs, doubling each time.
+	 *
+	 * Entries only ever left when their id was reused or taken, so a challenge
+	 * nobody came back for — a code requested and never submitted, which is the
+	 * ordinary abandoned login — stayed for the life of the process. Sweeping on
+	 * write keeps it bounded without a timer: a timer would hold the event loop
+	 * open and need a disposal contract this store does not have.
+	 *
+	 * Doubling makes the cost amortised O(1) per save rather than a scan on
+	 * every one, and the floor keeps a small deployment from sweeping constantly.
+	 */
+	#sweepAt = 64;
+
 	async save(c: OtpChallenge): Promise<void> {
 		this.#store.set(c.id, c);
+		if (this.#store.size > this.#sweepAt) this.#sweep();
+	}
+
+	/** Drop everything already expired. */
+	#sweep(): void {
+		const now = Date.now();
+		for (const [id, challenge] of this.#store) {
+			if (challenge.expiresAt < now) this.#store.delete(id);
+		}
+		this.#sweepAt = Math.max(64, this.#store.size * 2);
 	}
 	async find(id: string): Promise<OtpChallenge | null> {
 		return this.#store.get(id) ?? null;
@@ -178,7 +202,16 @@ export class OtpProvider {
 			expiresAt,
 			attempts: 0,
 		});
-		await this.#channel.send(recipient, code);
+		// Saved BEFORE the send, so a code that arrives can always be verified —
+		// but a send that fails must not leave the challenge behind. It could
+		// never be used (nobody has the code) and never be swept before its TTL,
+		// so an SMS gateway having a bad hour quietly filled the store.
+		try {
+			await this.#channel.send(recipient, code);
+		} catch (error) {
+			await this.#store.delete(id);
+			throw error;
+		}
 		return { challengeId: id, expiresAt };
 	}
 

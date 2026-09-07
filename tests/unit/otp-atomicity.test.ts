@@ -13,6 +13,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	MemoryOtpChallengeStore,
+	type OtpChallengeStore,
 	OtpProvider,
 } from "../../src/mfa/OtpProvider.js";
 
@@ -101,5 +102,90 @@ describe("warden > OTP under concurrency", () => {
 		const { challengeId } = await otp.start("user@example.com");
 
 		expect(await otp.verify(challengeId, code())).toEqual({ ok: true });
+	});
+});
+
+/**
+ * An abandoned challenge must not live forever.
+ *
+ * Entries only ever left when their id was reused or taken, so a code requested
+ * and never submitted — the ordinary abandoned login — stayed for the life of
+ * the process. Every one of them is a small, permanent leak, and nothing in the
+ * store ever looked at the clock.
+ */
+describe("warden > abandoned OTP challenges", () => {
+	it("drops expired challenges as new ones arrive", async () => {
+		const store = new MemoryOtpChallengeStore();
+		const expired = (id: string) => ({
+			id,
+			recipient: "user@example.com",
+			hash: "x",
+			expiresAt: Date.now() - 1,
+			attempts: 0,
+		});
+
+		// Past the sweep threshold, all of them already stale.
+		for (let i = 0; i < 200; i++) await store.save(expired(`old-${i}`));
+
+		// A sample of the earliest are gone; nothing had to ask for them.
+		expect(await store.find("old-0")).toBeNull();
+		expect(await store.find("old-1")).toBeNull();
+	});
+
+	it("keeps a live challenge while it sweeps around it", async () => {
+		const store = new MemoryOtpChallengeStore();
+		await store.save({
+			id: "live",
+			recipient: "user@example.com",
+			hash: "x",
+			expiresAt: Date.now() + 60_000,
+			attempts: 0,
+		});
+		for (let i = 0; i < 200; i++) {
+			await store.save({
+				id: `old-${i}`,
+				recipient: "u",
+				hash: "x",
+				expiresAt: Date.now() - 1,
+				attempts: 0,
+			});
+		}
+
+		// A sweep that took the valid one with it would log people out
+		// mid-verification, which is worse than the leak it fixes.
+		expect(await store.find("live")).not.toBeNull();
+	});
+
+	it("does not leave a challenge behind when delivery fails", async () => {
+		// Nobody has the code, so it can never be used and never be swept before
+		// its TTL — an SMS gateway having a bad hour quietly filled the store.
+		// Record what was written, so the assertion is about the entry that
+		// actually existed rather than about an id the test invented.
+		const saved: string[] = [];
+		const base = new MemoryOtpChallengeStore();
+		const store: OtpChallengeStore = {
+			async save(challenge) {
+				saved.push(challenge.id);
+				return base.save(challenge);
+			},
+			find: (id) => base.find(id),
+			delete: (id) => base.delete(id),
+			take: (id) => base.take(id),
+		};
+		const otp = new OtpProvider({
+			channel: {
+				send: async () => {
+					throw new Error("gateway down");
+				},
+			},
+			store,
+		});
+
+		await expect(otp.start("user@example.com")).rejects.toThrow("gateway down");
+
+		expect(saved).toHaveLength(1);
+		const orphan = saved[0];
+		if (orphan === undefined) throw new Error("the challenge was never saved");
+		expect(await store.find(orphan)).toBeNull();
 	});
 });
