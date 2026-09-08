@@ -149,6 +149,19 @@ export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
 	 */
 	constructor(ttlMs = 300_000, maxEntries = 10_000) {
 		this.#ttlMs = ttlMs;
+		// A ceiling of 0, a negative, NaN or Infinity is not a ceiling: the
+		// first two refuse every write and the last two disable the bound this
+		// exists to provide, silently. A caller asking for one of those means
+		// something, and none of the meanings is what would have happened.
+		if (!Number.isInteger(maxEntries) || maxEntries < 1) {
+			throw new WardenError(
+				"E_WARDEN_STORE_LIMIT_INVALID",
+				`maxEntries must be a positive integer, got ${String(maxEntries)}.`,
+				{
+					hint: "Pass the number of pending entries this process may hold — the default is 10_000.",
+				},
+			);
+		}
 		this.#maxEntries = maxEntries;
 	}
 

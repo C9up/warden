@@ -281,3 +281,27 @@ describe("warden > the memory store has a ceiling", () => {
 		).resolves.toBeUndefined();
 	});
 });
+
+/**
+ * A ceiling that is not a ceiling.
+ *
+ * 0 and negatives refuse every write; NaN and Infinity disable the bound
+ * silently, which is worse — the store advertises a limit and has none. A
+ * caller asking for one of those means something, and none of the meanings is
+ * what would have happened.
+ */
+describe("warden > the store ceiling has to be a number of entries", () => {
+	it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+		"refuses %p",
+		(value) => {
+			expect(() => new MemoryOtpChallengeStore(value)).toThrow(
+				/positive integer/,
+			);
+		},
+	);
+
+	it("accepts a real ceiling", () => {
+		expect(() => new MemoryOtpChallengeStore(1)).not.toThrow();
+		expect(() => new MemoryOtpChallengeStore()).not.toThrow();
+	});
+});
