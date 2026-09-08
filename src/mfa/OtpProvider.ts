@@ -76,8 +76,36 @@ export class MemoryOtpChallengeStore implements OtpChallengeStore {
 	 * every one, and the floor keeps a small deployment from sweeping constantly.
 	 */
 	#sweepAt = 64;
+	readonly #maxEntries: number;
+
+	/**
+	 * @param maxEntries How many pending challenges this process will hold.
+	 *   Sweeping only removes EXPIRED entries, so a flood of still-valid ones —
+	 *   an unauthenticated endpoint being hammered — grew the map without any
+	 *   ceiling. Default 10 000, which is far above a real login rate and far
+	 *   below a memory problem.
+	 */
+	constructor(maxEntries = 10_000) {
+		this.#maxEntries = maxEntries;
+	}
 
 	async save(c: OtpChallenge): Promise<void> {
+		if (this.#store.size >= this.#maxEntries && !this.#store.has(c.id)) {
+			// Swept first: the ceiling is about live challenges, not stale ones.
+			this.#sweep();
+		}
+		if (this.#store.size >= this.#maxEntries && !this.#store.has(c.id)) {
+			// REFUSED, not evicted. Evicting to make room lets whoever is
+			// flooding push a legitimate user's challenge out and lock them out;
+			// refusing the new one fails the attacker instead.
+			throw new WardenError(
+				"E_WARDEN_OTP_STORE_FULL",
+				`The in-memory OTP store is full (${this.#maxEntries} pending challenges).`,
+				{
+					hint: "Rate-limit the endpoint that mints codes, or move to a persistent store with its own TTL.",
+				},
+			);
+		}
 		this.#store.set(c.id, c);
 		if (this.#store.size > this.#sweepAt) this.#sweep();
 	}
@@ -146,6 +174,21 @@ export class OtpProvider {
 	readonly #maxAttempts: number;
 
 	constructor(config: OtpConfig) {
+		// `take` became part of the contract in 0.2.0 because a one-time code
+		// cannot be one-time without it. A store written against the old
+		// interface would otherwise fail at the first verification with
+		// "take is not a function" — during a login, far from the cause — so it
+		// is refused here, where the fix is obvious.
+		const store = config.store;
+		if (store !== undefined && typeof store.take !== "function") {
+			throw new WardenError(
+				"E_WARDEN_OTP_STORE_CONTRACT",
+				"The OTP challenge store does not implement take().",
+				{
+					hint: "take(id) must remove the challenge AND return it in ONE indivisible operation — `DELETE ... RETURNING` on SQL, GETDEL or a Lua script on Redis. Reading then deleting separately lets two requests with the same correct code both succeed.",
+				},
+			);
+		}
 		if (!config?.channel) {
 			throw new WardenError(
 				"INVALID_CONFIG",

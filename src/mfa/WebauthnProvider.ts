@@ -123,9 +123,15 @@ export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
 	#store = new Map<string, { challenge: string; expiresAt: number }>();
 	readonly #ttlMs: number;
 
-	/** @param ttlMs Server-side challenge lifetime. Default 5 min. */
-	constructor(ttlMs = 300_000) {
+	/**
+	 * @param ttlMs Server-side challenge lifetime. Default 5 min.
+	 * @param maxEntries How many pending ceremonies this process will hold.
+	 *   Sweeping removes only EXPIRED entries, so a flood of still-valid ones
+	 *   grew the map without a ceiling. Default 10 000.
+	 */
+	constructor(ttlMs = 300_000, maxEntries = 10_000) {
 		this.#ttlMs = ttlMs;
+		this.#maxEntries = maxEntries;
 	}
 
 	/**
@@ -138,8 +144,23 @@ export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
 	 * contract this store does not have.
 	 */
 	#sweepAt = 64;
+	readonly #maxEntries: number;
 
 	async save(state: string, challenge: string): Promise<void> {
+		if (this.#store.size >= this.#maxEntries && !this.#store.has(state)) {
+			this.#sweep();
+		}
+		if (this.#store.size >= this.#maxEntries && !this.#store.has(state)) {
+			// Refused rather than evicted: making room by dropping someone
+			// else's pending ceremony is how a flood locks a real user out.
+			throw new WardenError(
+				"E_WARDEN_WEBAUTHN_STORE_FULL",
+				`The in-memory WebAuthn challenge store is full (${this.#maxEntries} pending ceremonies).`,
+				{
+					hint: "Rate-limit the endpoint that starts a ceremony, or move to a persistent store with its own TTL.",
+				},
+			);
+		}
 		this.#store.set(state, { challenge, expiresAt: Date.now() + this.#ttlMs });
 		if (this.#store.size > this.#sweepAt) this.#sweep();
 	}
