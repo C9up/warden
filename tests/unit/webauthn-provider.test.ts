@@ -16,7 +16,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	type AuthenticationResponseJSON,
 	MemoryWebauthnChallengeStore,
+	MemoryWebauthnCredentialStore,
 	type RegistrationResponseJSON,
+	type WebauthnCredentialStore,
 	WebauthnProvider,
 } from "../../src/mfa/WebauthnProvider.js";
 
@@ -169,7 +171,10 @@ class FakeAuthenticator {
 }
 
 function provider(
-	over: { challengeStore?: MemoryWebauthnChallengeStore } = {},
+	over: {
+		challengeStore?: MemoryWebauthnChallengeStore;
+		credentialStore?: WebauthnCredentialStore;
+	} = {},
 ): WebauthnProvider {
 	return new WebauthnProvider({
 		rpName: "Fluveo",
@@ -257,11 +262,13 @@ describe("warden > WebauthnProvider — registration", () => {
 });
 
 describe("warden > WebauthnProvider — authentication", () => {
-	async function enroll(): Promise<{
+	async function enroll(
+		over: { credentialStore?: WebauthnCredentialStore } = {},
+	): Promise<{
 		p: WebauthnProvider;
 		auth: FakeAuthenticator;
 	}> {
-		const p = provider();
+		const p = provider(over);
 		const auth = new FakeAuthenticator();
 		const reg = await p.startRegistration(USER);
 		await p.finishRegistration(
@@ -324,6 +331,103 @@ describe("warden > WebauthnProvider — authentication", () => {
 			auth.authenticate(a2.options.challenge, 5),
 		);
 		expect(res.verified).toBe(false);
+	});
+
+	it("refuses a counter that goes BACK to zero", async () => {
+		// The spec guards the comparison with an OR: run it when EITHER counter
+		// is nonzero. Exempting a zero only on the incoming side let a clone
+		// that always reports 0 sail past a credential sitting at 42 — and then
+		// write 0 back, which is worse than letting it in once: it erases the
+		// stored counter and disarms the clone detection for every assertion
+		// after it.
+		//
+		// The store records what the provider ASKS it to write, so the refusal
+		// can be pinned on the ceremony step rather than on the store's own
+		// defence in depth.
+		const writes: Array<{ expected: number; next: number }> = [];
+		const credentialStore = new MemoryWebauthnCredentialStore();
+		const recording: WebauthnCredentialStore = {
+			save: (passkey) => credentialStore.save(passkey),
+			findById: (id) => credentialStore.findById(id),
+			findByUser: (userId) => credentialStore.findByUser(userId),
+			advanceCounter: (id, expected, next) => {
+				writes.push({ expected, next });
+				return credentialStore.advanceCounter(id, expected, next);
+			},
+		};
+		const { p, auth } = await enroll({ credentialStore: recording });
+		const a1 = await p.startAuthentication(USER.id);
+		expect(
+			(
+				await p.finishAuthentication(
+					a1.state,
+					auth.authenticate(a1.options.challenge, 42),
+				)
+			).verified,
+		).toBe(true);
+
+		writes.length = 0;
+
+		const a2 = await p.startAuthentication(USER.id);
+		const res = await p.finishAuthentication(
+			a2.state,
+			auth.authenticate(a2.options.challenge, 0),
+		);
+		expect(res.verified).toBe(false);
+
+		// The provider must refuse it ITSELF, not lean on the store noticing.
+		// An application's SQL or Redis store is written against the contract;
+		// the ceremony step is the relying party's, and the spec puts it here.
+		expect(writes).toEqual([]);
+
+		// And the stored counter is untouched, so the next legitimate assertion
+		// still has something to advance from.
+		const a3 = await p.startAuthentication(USER.id);
+		expect(
+			(
+				await p.finishAuthentication(
+					a3.state,
+					auth.authenticate(a3.options.challenge, 43),
+				)
+			).verified,
+		).toBe(true);
+	});
+
+	it("MemoryWebauthnCredentialStore refuses to write a counter backwards", async () => {
+		// The contract says this method ADVANCES, and the reference
+		// implementation is what an application copies. A store that writes
+		// whatever it is handed turns one bad decision upstream into a counter
+		// that is disarmed from then on.
+		const store = new MemoryWebauthnCredentialStore();
+		await store.save({
+			id: "cred-1",
+			userId: "u1",
+			publicKey: "pk",
+			alg: -7,
+			counter: 42,
+			transports: [],
+		});
+
+		expect(await store.advanceCounter("cred-1", 42, 0)).toBe(false);
+		expect((await store.findById("cred-1"))?.counter).toBe(42);
+		expect(await store.advanceCounter("cred-1", 42, 43)).toBe(true);
+	});
+
+	it("still accepts an authenticator that always reports zero", async () => {
+		// Many platform passkeys never implement the counter. Both sides zero is
+		// the case the OR deliberately lets through.
+		const { p, auth } = await enroll();
+		for (const _ of [1, 2]) {
+			const a = await p.startAuthentication(USER.id);
+			expect(
+				(
+					await p.finishAuthentication(
+						a.state,
+						auth.authenticate(a.options.challenge, 0),
+					)
+				).verified,
+			).toBe(true);
+		}
 	});
 });
 

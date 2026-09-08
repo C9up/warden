@@ -150,6 +150,11 @@ export interface WebauthnCredentialStore {
 	 *
 	 *   SQL    UPDATE … SET counter = $next WHERE id = $id AND counter = $expected
 	 *   Redis  a WATCH/MULTI, or a Lua compare-and-set
+	 *
+	 * It ADVANCES: an implementation must also refuse `next < expected`, so a
+	 * caller that decided wrongly cannot write the counter backwards and
+	 * disarm the defence for every assertion after it. In SQL that is a second
+	 * clause — `AND $next >= counter`.
 	 */
 	advanceCounter(id: string, expected: number, next: number): Promise<boolean>;
 }
@@ -293,6 +298,11 @@ export class MemoryWebauthnCredentialStore implements WebauthnCredentialStore {
 	): Promise<boolean> {
 		const p = this.#store.get(id);
 		if (!p || p.counter !== expected) return false;
+		// Defence in depth: this method ADVANCES. A caller that has already
+		// decided the assertion is good can still have decided it wrongly, and
+		// a store that writes whatever it is handed turns one bad decision into
+		// a permanently disarmed counter.
+		if (next < expected) return false;
 		this.#store.set(id, { ...p, counter: next });
 		return true;
 	}
@@ -589,9 +599,20 @@ export class WebauthnProvider {
 		}
 		const { authData } = checked;
 
-		// Replay guard: a non-zero counter must strictly advance. Authenticators
-		// that always report 0 (e.g. many platform passkeys) are exempt.
-		if (authData.signCount !== 0 && authData.signCount <= stored.counter) {
+		// Replay guard, as the spec words it: run the comparison when EITHER
+		// counter is nonzero, then refuse anything that does not strictly
+		// advance. Authenticators that always report 0 — many platform passkeys
+		// — stay exempt, because that is the case where both sides are zero.
+		//
+		// The guard used to test the incoming counter alone, so a credential
+		// sitting at 42 accepted an assertion reporting 0 and then WROTE 0
+		// back. That is worse than admitting one assertion: it erases the
+		// stored counter, and with it the clone detection for every assertion
+		// after it.
+		if (
+			(authData.signCount !== 0 || stored.counter !== 0) &&
+			authData.signCount <= stored.counter
+		) {
 			return { verified: false };
 		}
 		// The write is what decides. Comparing here and writing unconditionally
