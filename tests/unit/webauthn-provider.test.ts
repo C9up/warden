@@ -168,11 +168,14 @@ class FakeAuthenticator {
 	}
 }
 
-function provider(): WebauthnProvider {
+function provider(
+	over: { challengeStore?: MemoryWebauthnChallengeStore } = {},
+): WebauthnProvider {
 	return new WebauthnProvider({
 		rpName: "Fluveo",
 		rpID: RP_ID,
 		origin: ORIGIN,
+		...over,
 	});
 }
 
@@ -329,13 +332,17 @@ describe("warden > WebauthnProvider — challenge TTL", () => {
 		vi.useFakeTimers();
 		try {
 			const store = new MemoryWebauthnChallengeStore(1000);
-			await store.save("s1", "chal-1");
+			await store.save("s1", { challenge: "chal-1", userId: "u1" });
 			vi.advanceTimersByTime(1001);
 			expect(await store.take("s1")).toBeNull();
 
-			// A fresh challenge within the TTL is still returned once.
-			await store.save("s2", "chal-2");
-			expect(await store.take("s2")).toBe("chal-2");
+			// A fresh ceremony within the TTL is still returned once, identity
+			// included — that is what binds the passkey to who started it.
+			await store.save("s2", { challenge: "chal-2", userId: "u2" });
+			expect(await store.take("s2")).toEqual({
+				challenge: "chal-2",
+				userId: "u2",
+			});
 			expect(await store.take("s2")).toBeNull(); // single-use
 		} finally {
 			vi.useRealTimers();
@@ -377,5 +384,70 @@ describe("warden > WebauthnProvider — required user verification", () => {
 			auth.authenticate(a2.options.challenge, 2, ORIGIN, 0x05),
 		);
 		expect(withUv.verified).toBe(true);
+	});
+});
+
+/**
+ * A ceremony belongs to the user who started it.
+ *
+ * The store kept only `state -> challenge`, so `finishRegistration(state,
+ * userId, …)` accepted whatever id the caller produced and registered the
+ * passkey under it. An integration reading that id back from the request, or a
+ * session that changed between the two steps, attached a valid credential to
+ * the wrong account — a working login on someone else's identity, with nothing
+ * to show for it.
+ */
+describe("warden > binding a WebAuthn ceremony to its user", () => {
+	it("carries the identity alongside the challenge", async () => {
+		const store = new MemoryWebauthnChallengeStore();
+		await store.save("s", { challenge: "c", userId: "alice" });
+
+		expect(await store.take("s")).toEqual({ challenge: "c", userId: "alice" });
+	});
+
+	it("refuses a registration finished for a DIFFERENT user", async () => {
+		// The response is genuine — the same one that registers successfully
+		// below — so the only thing refusing it is the identity check.
+		const p = provider();
+		const auth = new FakeAuthenticator();
+		const { options, state } = await p.startRegistration(USER);
+
+		const res = await p.finishRegistration(
+			state,
+			"mallory",
+			auth.register(options.challenge),
+		);
+
+		expect(res.verified).toBe(false);
+	});
+
+	it("still registers for the user who started it", async () => {
+		// The guard must not refuse the legitimate case it exists to protect.
+		const p = provider();
+		const auth = new FakeAuthenticator();
+		const { options, state } = await p.startRegistration(USER);
+
+		const res = await p.finishRegistration(
+			state,
+			USER.id,
+			auth.register(options.challenge),
+		);
+
+		expect(res.verified).toBe(true);
+	});
+
+	it("consumes the ceremony even when it refuses", async () => {
+		// A refusal must not leave the state replayable with the right id.
+		const challenges = new MemoryWebauthnChallengeStore();
+		const p = provider({ challengeStore: challenges });
+		const auth = new FakeAuthenticator();
+		const { options, state } = await p.startRegistration(USER);
+		await p.finishRegistration(
+			state,
+			"mallory",
+			auth.register(options.challenge),
+		);
+
+		expect(await challenges.take(state)).toBeNull();
 	});
 });

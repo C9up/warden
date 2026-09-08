@@ -90,13 +90,31 @@ export interface AuthenticationOptionsJSON {
  * store should use a TTL column / `EXPIRE`; the in-memory default stamps an
  * `expiresAt` and refuses an expired challenge in `take`.
  */
-export interface WebauthnChallengeStore {
-	save(state: string, challenge: string): Promise<void>;
+/**
+ * What a pending ceremony holds.
+ *
+ * The identity is stored WITH the challenge, and that is the point. A store
+ * that kept only `state -> challenge` let `finishRegistration` be handed any
+ * `userId` the caller produced: an integration that read it back from the
+ * request, or whose session changed between the two steps, attached a valid
+ * passkey to the wrong account — a working credential on someone else's login.
+ */
+export interface WebauthnCeremony {
+	challenge: string;
 	/**
-	 * Return the challenge for `state` and remove it (single-use). MUST return
-	 * `null` if the stored challenge has passed its TTL.
+	 * The user this ceremony was started for. Absent only for a usernameless
+	 * authentication, where the credential itself names the owner.
 	 */
-	take(state: string): Promise<string | null>;
+	userId?: string;
+}
+
+export interface WebauthnChallengeStore {
+	save(state: string, ceremony: WebauthnCeremony): Promise<void>;
+	/**
+	 * Return the ceremony for `state` and remove it (single-use). MUST return
+	 * `null` if the stored ceremony has passed its TTL.
+	 */
+	take(state: string): Promise<WebauthnCeremony | null>;
 }
 
 /** A registered passkey, persisted between ceremonies. */
@@ -120,7 +138,7 @@ export interface WebauthnCredentialStore {
 }
 
 export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
-	#store = new Map<string, { challenge: string; expiresAt: number }>();
+	#store = new Map<string, WebauthnCeremony & { expiresAt: number }>();
 	readonly #ttlMs: number;
 
 	/**
@@ -146,7 +164,7 @@ export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
 	#sweepAt = 64;
 	readonly #maxEntries: number;
 
-	async save(state: string, challenge: string): Promise<void> {
+	async save(state: string, ceremony: WebauthnCeremony): Promise<void> {
 		if (this.#store.size >= this.#maxEntries && !this.#store.has(state)) {
 			this.#sweep();
 		}
@@ -161,7 +179,10 @@ export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
 				},
 			);
 		}
-		this.#store.set(state, { challenge, expiresAt: Date.now() + this.#ttlMs });
+		this.#store.set(state, {
+			...ceremony,
+			expiresAt: Date.now() + this.#ttlMs,
+		});
 		if (this.#store.size > this.#sweepAt) this.#sweep();
 	}
 
@@ -173,13 +194,13 @@ export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
 		}
 		this.#sweepAt = Math.max(64, this.#store.size * 2);
 	}
-	async take(state: string): Promise<string | null> {
+	async take(state: string): Promise<WebauthnCeremony | null> {
 		const entry = this.#store.get(state);
 		this.#store.delete(state); // single-use regardless of freshness
 		if (!entry || entry.expiresAt < Date.now()) {
 			return null;
 		}
-		return entry.challenge;
+		return { challenge: entry.challenge, userId: entry.userId };
 	}
 }
 
@@ -308,7 +329,9 @@ export class WebauthnProvider {
 			},
 		};
 		const state = randomBytes(16).toString("hex");
-		await this.#challenges.save(state, challenge);
+		// The identity travels WITH the challenge. Stored apart, `finish` had to
+		// trust whatever `userId` the caller handed back.
+		await this.#challenges.save(state, { challenge, userId: user.id });
 		return { options, state };
 	}
 
@@ -321,15 +344,24 @@ export class WebauthnProvider {
 		userId: string,
 		response: RegistrationResponseJSON,
 	): Promise<{ verified: boolean }> {
-		const expectedChallenge = await this.#challenges.take(state);
-		if (!expectedChallenge) {
+		const ceremony = await this.#challenges.take(state);
+		if (!ceremony) {
+			return { verified: false };
+		}
+		// The passkey is registered for the user who STARTED the ceremony, not
+		// for whoever the caller names now. A mismatch is an integration reading
+		// the id back from the request, or a session that changed between the
+		// two steps; either way it would attach a working credential to the
+		// wrong account, so it is refused rather than resolved in someone's
+		// favour.
+		if (ceremony.userId !== undefined && ceremony.userId !== userId) {
 			return { verified: false };
 		}
 		if (
 			!this.#validClientData(
 				response.response.clientDataJSON,
 				"webauthn.create",
-				expectedChallenge,
+				ceremony.challenge,
 			)
 		) {
 			return { verified: false };
@@ -390,7 +422,10 @@ export class WebauthnProvider {
 				: undefined,
 		};
 		const state = randomBytes(16).toString("hex");
-		await this.#challenges.save(state, challenge);
+		// `userId` is optional here: a usernameless login is named by the
+		// credential itself. When it IS given, storing it lets `finish` refuse an
+		// assertion from someone else's passkey.
+		await this.#challenges.save(state, { challenge, userId });
 		return { options, state };
 	}
 
@@ -403,15 +438,15 @@ export class WebauthnProvider {
 		state: string,
 		response: AuthenticationResponseJSON,
 	): Promise<{ verified: boolean; userId?: string }> {
-		const expectedChallenge = await this.#challenges.take(state);
-		if (!expectedChallenge) {
+		const ceremony = await this.#challenges.take(state);
+		if (!ceremony) {
 			return { verified: false };
 		}
 		if (
 			!this.#validClientData(
 				response.response.clientDataJSON,
 				"webauthn.get",
-				expectedChallenge,
+				ceremony.challenge,
 			)
 		) {
 			return { verified: false };
@@ -419,6 +454,13 @@ export class WebauthnProvider {
 
 		const stored = await this.#credentials.findById(response.id);
 		if (!stored) {
+			return { verified: false };
+		}
+		// When the ceremony named a user, the asserted credential has to be
+		// theirs. `allowCredentials` is a HINT the browser may ignore and an
+		// attacker simply will: without this, a login started for one account
+		// could be completed with a passkey belonging to another.
+		if (ceremony.userId !== undefined && stored.userId !== ceremony.userId) {
 			return { verified: false };
 		}
 
