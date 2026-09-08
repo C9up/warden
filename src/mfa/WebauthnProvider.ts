@@ -134,7 +134,44 @@ export interface WebauthnCredentialStore {
 	save(passkey: StoredPasskey): Promise<void>;
 	findById(id: string): Promise<StoredPasskey | null>;
 	findByUser(userId: string): Promise<StoredPasskey[]>;
-	updateCounter(id: string, counter: number): Promise<void>;
+	/**
+	 * Advance the signature counter, and ONLY from the value that was read.
+	 *
+	 * The counter is the whole of the cloned-authenticator defence: a clone
+	 * replays a lower count than the real device has reached, and the mismatch
+	 * is what betrays it. Read-compare-write across `findById` and a plain
+	 * `updateCounter` let two concurrent assertions read the same old value,
+	 * both pass, and then write in either order — so the stored counter could
+	 * go BACKWARDS and the guard lost the only evidence it has.
+	 *
+	 * Returns `false` when the stored value is no longer `expected`, which
+	 * means another assertion won the race and this one must be refused. A
+	 * persistent store implements it as a conditional write:
+	 *
+	 *   SQL    UPDATE … SET counter = $next WHERE id = $id AND counter = $expected
+	 *   Redis  a WATCH/MULTI, or a Lua compare-and-set
+	 */
+	advanceCounter(id: string, expected: number, next: number): Promise<boolean>;
+}
+
+/**
+ * Run a parse of attacker-supplied bytes, turning a throw into "invalid".
+ *
+ * A truncated attestation, a malformed COSE key or authenticator data that
+ * stops mid-structure are INPUT errors — `CBOR: item starts past the end of the
+ * buffer` reaching the caller is a 500 for a bad request, and a 500 tells
+ * whoever sent it that they reached something which did not expect them.
+ *
+ * Deliberately narrow: only the decoding and the signature check go through
+ * here. A store that cannot be read is infrastructure, and reporting an outage
+ * as "not verified" would let a database failure read as a failed login.
+ */
+function parsePayload<T>(parse: () => T | null): T | null {
+	try {
+		return parse();
+	} catch {
+		return null;
+	}
 }
 
 export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
@@ -148,6 +185,19 @@ export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
 	 *   grew the map without a ceiling. Default 10 000.
 	 */
 	constructor(ttlMs = 300_000, maxEntries = 10_000) {
+		// A TTL of Infinity or NaN is not a TTL: the challenge never expires,
+		// against a contract that says it MUST be time-bound — and an unconsumed
+		// challenge left live indefinitely is exactly the replay window the
+		// expiry exists to close.
+		if (!Number.isInteger(ttlMs) || ttlMs < 1) {
+			throw new WardenError(
+				"E_WARDEN_STORE_TTL_INVALID",
+				`ttlMs must be a positive integer, got ${String(ttlMs)}.`,
+				{
+					hint: "Give the ceremony a lifetime in milliseconds — the default is 300000 (5 min).",
+				},
+			);
+		}
 		this.#ttlMs = ttlMs;
 		// A ceiling of 0, a negative, NaN or Infinity is not a ceiling: the
 		// first two refuse every write and the last two disable the bound this
@@ -210,7 +260,9 @@ export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
 	async take(state: string): Promise<WebauthnCeremony | null> {
 		const entry = this.#store.get(state);
 		this.#store.delete(state); // single-use regardless of freshness
-		if (!entry || entry.expiresAt < Date.now()) {
+		// `<=`, not `<`: an entry whose deadline is exactly now has expired.
+		// Strictly-less left it valid for the remainder of that millisecond.
+		if (!entry || entry.expiresAt <= Date.now()) {
 			return null;
 		}
 		return { challenge: entry.challenge, userId: entry.userId };
@@ -228,11 +280,21 @@ export class MemoryWebauthnCredentialStore implements WebauthnCredentialStore {
 	async findByUser(userId: string): Promise<StoredPasskey[]> {
 		return [...this.#store.values()].filter((p) => p.userId === userId);
 	}
-	async updateCounter(id: string, counter: number): Promise<void> {
+	/**
+	 * Atomic here for free: a synchronous read, compare and write with no
+	 * `await` between them cannot be interleaved on a single-threaded runtime.
+	 * Written as one block on purpose — an `await` inside would silently
+	 * reintroduce the race this exists to close.
+	 */
+	async advanceCounter(
+		id: string,
+		expected: number,
+		next: number,
+	): Promise<boolean> {
 		const p = this.#store.get(id);
-		if (p) {
-			this.#store.set(id, { ...p, counter });
-		}
+		if (!p || p.counter !== expected) return false;
+		this.#store.set(id, { ...p, counter: next });
+		return true;
 	}
 }
 
@@ -380,33 +442,51 @@ export class WebauthnProvider {
 			return { verified: false };
 		}
 
-		const attestation = decodeCbor(
-			base64urlToBuffer(response.response.attestationObject),
-		).value;
-		if (!(attestation instanceof Map)) {
+		// The payload is attacker-supplied: a truncated attestation, a malformed
+		// COSE key or authenticator data that stops mid-structure are INPUT
+		// errors, and this method promises `{ verified: false }` for an invalid
+		// response. Letting the decoder's exception out turned a bad request
+		// into a 500 — and a 500 tells whoever sent it that they reached
+		// something that did not expect them.
+		//
+		// Only the parsing is wrapped: a store that cannot be read is
+		// infrastructure, and swallowing that would report "not verified" for an
+		// outage.
+		const parsed = parsePayload(() => {
+			const attestation = decodeCbor(
+				base64urlToBuffer(response.response.attestationObject),
+			).value;
+			if (!(attestation instanceof Map)) return null;
+			const authDataRaw = attestation.get("authData");
+			if (!Buffer.isBuffer(authDataRaw)) return null;
+			const authData = parseAuthenticatorData(authDataRaw);
+			if (
+				!this.#validAuthenticator(authData) ||
+				!authData.cosePublicKey ||
+				!authData.cosePublicKeyBytes ||
+				!authData.credentialId
+			) {
+				return null;
+			}
+			// The narrowing is carried OUT of the closure: the guard above proved
+			// these three are present, and the caller cannot see that through an
+			// object literal typed from `authData` alone.
+			return {
+				credentialId: authData.credentialId,
+				publicKeyBytes: authData.cosePublicKeyBytes,
+				signCount: authData.signCount,
+				alg: coseToKeyObject(authData.cosePublicKey).alg,
+			};
+		});
+		if (parsed === null) {
 			return { verified: false };
 		}
-		const authDataRaw = attestation.get("authData");
-		if (!Buffer.isBuffer(authDataRaw)) {
-			return { verified: false };
-		}
-		const authData = parseAuthenticatorData(authDataRaw);
-		if (
-			!this.#validAuthenticator(authData) ||
-			!authData.cosePublicKey ||
-			!authData.cosePublicKeyBytes ||
-			!authData.credentialId
-		) {
-			return { verified: false };
-		}
-
-		const { alg } = coseToKeyObject(authData.cosePublicKey);
 		await this.#credentials.save({
-			id: bufferToBase64url(authData.credentialId),
+			id: bufferToBase64url(parsed.credentialId),
 			userId,
-			publicKey: bufferToBase64url(authData.cosePublicKeyBytes),
-			alg,
-			counter: authData.signCount,
+			publicKey: bufferToBase64url(parsed.publicKeyBytes),
+			alg: parsed.alg,
+			counter: parsed.signCount,
 			transports: response.response.transports,
 		});
 		return { verified: true };
@@ -477,36 +557,56 @@ export class WebauthnProvider {
 			return { verified: false };
 		}
 
-		const authDataRaw = base64urlToBuffer(response.response.authenticatorData);
-		const authData = parseAuthenticatorData(authDataRaw);
-		if (!this.#validAuthenticator(authData)) {
-			return { verified: false };
-		}
+		// Same reasoning as registration: the payload is attacker-supplied, and
+		// this method promises `{ verified: false }` for an invalid one. Only
+		// the parsing and the signature check are wrapped — a store failure is
+		// infrastructure and must not be reported as "not verified".
+		const checked = parsePayload(() => {
+			const authDataRaw = base64urlToBuffer(
+				response.response.authenticatorData,
+			);
+			const authData = parseAuthenticatorData(authDataRaw);
+			if (!this.#validAuthenticator(authData)) return null;
 
-		// Signed payload = authenticatorData ‖ SHA-256(clientDataJSON).
-		const clientHash = sha256(
-			base64urlToBuffer(response.response.clientDataJSON),
-		);
-		const signedData = Buffer.concat([authDataRaw, clientHash]);
-		const { key } = coseToKeyObject(
-			expectCoseMap(base64urlToBuffer(stored.publicKey)),
-		);
-		const ok = verifyWebauthnSignature(
-			stored.alg,
-			key,
-			signedData,
-			base64urlToBuffer(response.response.signature),
-		);
-		if (!ok) {
+			// Signed payload = authenticatorData ‖ SHA-256(clientDataJSON).
+			const clientHash = sha256(
+				base64urlToBuffer(response.response.clientDataJSON),
+			);
+			const signedData = Buffer.concat([authDataRaw, clientHash]);
+			const { key } = coseToKeyObject(
+				expectCoseMap(base64urlToBuffer(stored.publicKey)),
+			);
+			const ok = verifyWebauthnSignature(
+				stored.alg,
+				key,
+				signedData,
+				base64urlToBuffer(response.response.signature),
+			);
+			return ok ? { authData } : null;
+		});
+		if (checked === null) {
 			return { verified: false };
 		}
+		const { authData } = checked;
 
 		// Replay guard: a non-zero counter must strictly advance. Authenticators
 		// that always report 0 (e.g. many platform passkeys) are exempt.
 		if (authData.signCount !== 0 && authData.signCount <= stored.counter) {
 			return { verified: false };
 		}
-		await this.#credentials.updateCounter(stored.id, authData.signCount);
+		// The write is what decides. Comparing here and writing unconditionally
+		// let a second assertion that read the same old counter also pass, and
+		// whichever wrote last set the stored value — possibly backwards.
+		// Refusing when the counter has moved under us costs a legitimate user
+		// one retry and costs a clone the whole attack.
+		const advanced = await this.#credentials.advanceCounter(
+			stored.id,
+			stored.counter,
+			authData.signCount,
+		);
+		if (!advanced) {
+			return { verified: false };
+		}
 		return { verified: true, userId: stored.userId };
 	}
 

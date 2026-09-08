@@ -451,3 +451,57 @@ describe("warden > binding a WebAuthn ceremony to its user", () => {
 		expect(await challenges.take(state)).toBeNull();
 	});
 });
+
+/**
+ * Attacker-supplied bytes are input, not an internal error.
+ *
+ * A truncated attestation reached the caller as
+ * `CBOR: item starts past the end of the buffer` — a 500 for a bad request,
+ * which tells whoever sent it that they reached something not expecting them.
+ * The method promises `{ verified: false }` for an invalid response.
+ */
+describe("warden > malformed WebAuthn input", () => {
+	it("refuses a truncated attestation instead of throwing", async () => {
+		// Genuine everything EXCEPT the attestation, so the client data passes
+		// and the decoder is actually reached — which is where it threw.
+		const p = provider();
+		const auth = new FakeAuthenticator();
+		const { options, state } = await p.startRegistration(USER);
+		const genuine = auth.register(options.challenge);
+
+		const res = await p.finishRegistration(state, USER.id, {
+			...genuine,
+			response: { ...genuine.response, attestationObject: "" },
+		} as never);
+
+		expect(res.verified).toBe(false);
+	});
+});
+
+describe("warden > the challenge TTL has to be a duration", () => {
+	it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+		"refuses %p",
+		(value) => {
+			// Infinity and NaN mean the challenge never expires, against a
+			// contract that says it MUST be time-bound.
+			expect(() => new MemoryWebauthnChallengeStore(value)).toThrow(
+				/positive integer/,
+			);
+		},
+	);
+
+	it("treats a deadline of exactly now as expired", async () => {
+		vi.useFakeTimers();
+		try {
+			const store = new MemoryWebauthnChallengeStore(1000);
+			await store.save("s", { challenge: "c", userId: "u" });
+
+			vi.advanceTimersByTime(1000);
+
+			// `<` left it valid for the remainder of that millisecond.
+			expect(await store.take("s")).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
