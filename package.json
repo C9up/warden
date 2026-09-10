@@ -49,8 +49,8 @@
     }
   },
   "peerDependencies": {
-    "@c9up/ream": "^0.2.0",
-    "@c9up/quasar": "^0.1.0"
+    "@c9up/quasar": "^0.1.0",
+    "@c9up/ream": "^0.2.0"
   },
   "peerDependenciesMeta": {
     "@c9up/ream": {
@@ -74,14 +74,14 @@
     "test:integration": "vitest run -c vitest.integration.config.ts"
   },
   "devDependencies": {
-    "@c9up/ream": "^0.2.0",
-    "@biomejs/biome": "^2.4.10",
+    "@biomejs/biome": "^2.5.12",
     "@c9up/quasar": "^0.1.0",
-    "@types/node": "^22.19.15",
-    "@vitest/coverage-v8": "^4.1.2",
+    "@c9up/ream": "^0.2.0",
+    "@types/node": "^22.20.1",
+    "@vitest/coverage-v8": "4.1.11",
     "reflect-metadata": "^0.2.2",
-    "typescript": "^6.0.2",
-    "vitest": "^4.1.2"
+    "typescript": "^6.0.3",
+    "vitest": "4.1.11"
   },
   "pnpm": {
     "//": "Pin the test toolchain to the versions used in dev. Without a committed lockfile the standalone CI resolves fresh (esbuild 0.28.x / vitest 4.1.9), whose decorator transform flakes 'Invalid or unexpected token' on the @Guard/@Permission/@Role suites. Overrides only apply when this package is the install root (CI), so the monorepo workspace is unaffected.",
