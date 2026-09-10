@@ -18,6 +18,7 @@
 import type { AuthStrategy, UserPayload } from "./AuthManager.js";
 import type { BasePolicy } from "./bouncer/BasePolicy.js";
 import type { Ability } from "./bouncer/types.js";
+import type { TokenDuration } from "./duration.js";
 import type { MfaManager } from "./mfa/MfaManager.js";
 import type { RightsStore, Scope } from "./rights/types.js";
 import type { ApiKeyConfig } from "./strategies/ApiKeyStrategy.js";
@@ -43,6 +44,9 @@ export interface ScopeRequestContext {
 
 export interface JwtConfig {
 	secret: string;
+	/** Token lifetime: seconds, or a duration string (`'1h'`, `'7 days'`). */
+	expiresIn?: TokenDuration;
+	/** The seconds-only spelling this package shipped first. `expiresIn` wins. */
 	expiresInSeconds?: number;
 	findUser: (id: string) => Promise<UserPayload | null>;
 	verifyCredentials: (

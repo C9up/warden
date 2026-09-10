@@ -26,7 +26,8 @@ export default defineConfig({
   guards: {
     jwt: jwtGuard({
       secret: process.env.JWT_SECRET ?? '',
-      expiresInSeconds: Number(process.env.JWT_EXPIRY ?? '3600'),
+      // Seconds, or a duration string — JWT_EXPIRY=1h works as written.
+      expiresIn: process.env.JWT_EXPIRY ?? 3600,
       // TODO: wire these to your user model (e.g. via your ORM).
       // The JWT guard needs both to issue and verify tokens.
       findUser: async (_id) => {

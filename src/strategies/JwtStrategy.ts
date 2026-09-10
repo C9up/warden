@@ -10,6 +10,7 @@ import type {
 	AuthStrategy,
 	UserPayload,
 } from "../AuthManager.js";
+import { resolveExpiresInSeconds, type TokenDuration } from "../duration.js";
 import { nativeWarden } from "../native.js";
 import type { TokenBlacklist } from "../TokenBlacklist.js";
 
@@ -71,6 +72,13 @@ export interface JwtStrategyConfig {
 	 * correctness but ordering by recency keeps the common path fast.
 	 */
 	previousSecrets?: readonly string[];
+	/**
+	 * Token lifetime — seconds as a number, or a duration string (`'1h'`,
+	 * `'7 days'`), which is the spelling upstream uses and the one a config
+	 * copied from an Adonis app carries.
+	 */
+	expiresIn?: TokenDuration;
+	/** The seconds-only spelling this package shipped first. `expiresIn` wins. */
 	expiresInSeconds?: number;
 	/**
 	 * Resolve the user for a verified token. Receives the token `sub` AND the
@@ -121,7 +129,11 @@ export class JwtStrategy implements AuthStrategy {
 		}
 		this.#secret = config.secret;
 		this.#verifySecrets = [config.secret, ...(config.previousSecrets ?? [])];
-		this.#expiresIn = config.expiresInSeconds ?? 3600;
+		this.#expiresIn = resolveExpiresInSeconds(
+			config.expiresIn,
+			config.expiresInSeconds,
+			3600,
+		);
 		this.#findUser = config.findUser;
 		this.#verifyCredentials = config.verifyCredentials;
 		this.#blacklist = config.blacklist;

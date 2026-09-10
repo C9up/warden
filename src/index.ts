@@ -56,6 +56,8 @@ export {
 	sessionGuard,
 } from "./config.js";
 export { configure } from "./configure.js";
+export type { TokenDuration } from "./duration.js";
+export { parseDurationSeconds } from "./duration.js";
 export {
 	E_INVALID_CREDENTIALS,
 	E_UNAUTHORIZED_ACCESS,
