@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { stubsRoot } from "./stubs.js";
 
 interface Codemods {
 	addProvider(importPath: string): Promise<void>;
@@ -8,6 +9,12 @@ interface Codemods {
 		content: string,
 		options?: { force?: boolean },
 	): Promise<void>;
+	makeUsingStub(
+		stubsRoot: string,
+		stubPath: string,
+		state?: Record<string, string | number | boolean>,
+		options?: { force?: boolean },
+	): Promise<{ path: string; contents: string }>;
 }
 
 export async function configure(codemods: Codemods): Promise<void> {
@@ -17,30 +24,7 @@ export async function configure(codemods: Codemods): Promise<void> {
 		JWT_SECRET: jwtSecret,
 		JWT_EXPIRY: "3600",
 	});
-	await codemods.writeFile(
-		"config/auth.ts",
-		`import { defineConfig, jwtGuard } from '@c9up/warden'
-
-export default defineConfig({
-  default: 'jwt',
-  guards: {
-    jwt: jwtGuard({
-      secret: process.env.JWT_SECRET ?? '',
-      // Seconds, or a duration string — JWT_EXPIRY=1h works as written.
-      expiresIn: process.env.JWT_EXPIRY ?? 3600,
-      // TODO: wire these to your user model (e.g. via your ORM).
-      // The JWT guard needs both to issue and verify tokens.
-      findUser: async (_id) => {
-        throw new Error('TODO: implement findUser(id) for the JWT guard in config/auth.ts')
-      },
-      verifyCredentials: async (_email, _password) => {
-        throw new Error('TODO: implement verifyCredentials(email, password) in config/auth.ts')
-      },
-    }),
-  },
-})
-`,
-	);
+	await codemods.makeUsingStub(stubsRoot, "config/auth.stub");
 	// Announce the TODOs on stderr so `ream add @c9up/warden` doesn't end
 	// with a quiet success that the user reads as "auth is wired". The
 	// generated config/auth.ts ships with `throw new Error('TODO ...')`

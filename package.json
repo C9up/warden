@@ -1,6 +1,6 @@
 {
   "name": "@c9up/warden",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Warden — Authentication & authorization for the Ream framework",
   "license": "MIT",
   "type": "module",
@@ -10,6 +10,7 @@
     "LICENSE",
     "README.md",
     "dist",
+    "stubs",
     "index.*.node",
     "scripts",
     "src"
@@ -50,7 +51,7 @@
   },
   "peerDependencies": {
     "@c9up/quasar": "^0.1.0 || ^0.2.0",
-    "@c9up/ream": "^0.2.0"
+    "@c9up/ream": "^0.2.26"
   },
   "peerDependenciesMeta": {
     "@c9up/ream": {
@@ -76,7 +77,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
     "@c9up/quasar": "^0.1.0 || ^0.2.0",
-    "@c9up/ream": "^0.2.0",
+    "@c9up/ream": "^0.2.26",
     "@types/node": "^22.20.1",
     "@vitest/coverage-v8": "4.1.11",
     "reflect-metadata": "^0.2.2",
