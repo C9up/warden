@@ -23,11 +23,6 @@ export type NativeWarden = typeof import("./native/generated.js");
 const attempt = loadNativeBinary<NativeWarden>();
 const native = attempt.loaded ? attempt.binary : undefined;
 
-/** Whether the Rust NAPI engine loaded. */
-export function isNativeAvailable(): boolean {
-	return native !== undefined;
-}
-
 /** Get the native engine. Returns undefined if not loaded — caller must throw. */
 export function nativeWarden(): NativeWarden | undefined {
 	return native;

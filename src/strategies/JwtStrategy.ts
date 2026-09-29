@@ -31,6 +31,17 @@ export interface JwtClaims {
 	[key: string]: unknown;
 }
 
+/** What a token asserts beyond who its user is. */
+export interface SignTokenOptions {
+	/**
+	 * The user completed an MFA step-up for this session (`MfaManager.verify()`
+	 * succeeded). Sets the `mfa` claim `@RequireMfa()` reads. It says the step
+	 * was DONE, not that the account has MFA enabled — so it comes from the
+	 * step-up flow and never from `findUser`.
+	 */
+	mfa?: boolean;
+}
+
 function sign(payload: JwtClaims, secret: string): string {
 	const rust = nativeWarden();
 	if (!rust) {
@@ -204,10 +215,16 @@ export class JwtStrategy implements AuthStrategy {
 			return { authenticated: false, error: "User not found" };
 		}
 
-		return { authenticated: true, user };
+		// `mfa` is the TOKEN's step-up claim, whatever `findUser` said: an app
+		// that returns the account's "MFA enabled" flag there would otherwise
+		// unlock @RequireMfa routes for a token that never stepped up.
+		return {
+			authenticated: true,
+			user: { ...user, mfa: payload.mfa === true },
+		};
 	}
 
-	signToken(user: UserPayload): string {
+	signToken(user: UserPayload, options: SignTokenOptions = {}): string {
 		const now = Math.floor(Date.now() / 1000);
 		return sign(
 			{
@@ -217,6 +234,7 @@ export class JwtStrategy implements AuthStrategy {
 				iat: now,
 				exp: now + this.#expiresIn,
 				jti: randomUUID(),
+				...(options.mfa === true ? { mfa: true } : {}),
 			},
 			this.#secret,
 		);

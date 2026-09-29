@@ -113,6 +113,8 @@ export interface WardenContext {
 	response: {
 		status: (code: number) => unknown;
 		json: (data: unknown) => void;
+		/** Set a response header — the `WWW-Authenticate` challenge of a 401. */
+		header?: (name: string, value: string) => unknown;
 		/**
 		 * Write an ENCRYPTED cookie, for the remember-me token. Optional: a
 		 * host without it simply cannot offer "keep me signed in", and
@@ -423,6 +425,13 @@ export function renderAuthError(
 	if (wantsHtml && error.redirectTo && ctx.response.redirect) {
 		ctx.response.redirect(error.redirectTo);
 		return;
+	}
+	if (error.challenge !== undefined) {
+		ctx.response.header?.call(
+			ctx.response,
+			"WWW-Authenticate",
+			error.challenge,
+		);
 	}
 	ctx.response.status(error.status ?? 401);
 	ctx.response.json({

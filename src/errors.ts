@@ -48,14 +48,24 @@ export class WardenError extends Error {
 export class E_UNAUTHORIZED_ACCESS extends WardenError {
 	readonly redirectTo?: string;
 	readonly guardDriverName: string;
+	/**
+	 * The `WWW-Authenticate` value the 401 carries — a Basic guard's challenge,
+	 * without which a browser never prompts for credentials.
+	 */
+	readonly challenge?: string;
 
 	constructor(
 		message: string,
-		options: { guardDriverName: string; redirectTo?: string },
+		options: {
+			guardDriverName: string;
+			redirectTo?: string;
+			challenge?: string;
+		},
 	) {
 		super("E_UNAUTHORIZED_ACCESS", message, { status: 401 });
 		this.guardDriverName = options.guardDriverName;
 		this.redirectTo = options.redirectTo;
+		this.challenge = options.challenge;
 	}
 }
 

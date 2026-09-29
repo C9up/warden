@@ -6,6 +6,13 @@
 
 import "./augmentations.js";
 
+export type {
+	AttemptCount,
+	AttemptRedisClient,
+	AttemptRedisSource,
+	AttemptStore,
+} from "./AttemptStore.js";
+export { MemoryAttemptStore, RedisAttemptStore } from "./AttemptStore.js";
 export type { AuthAttempt, ExtractedCredentials } from "./Authenticator.js";
 export {
 	API_KEY_GUARD_NAMES,
@@ -24,7 +31,10 @@ export {
 	authEventPrefix,
 	type WardenEmitter,
 } from "./AuthManager.js";
-export type { AuthRateLimiterConfig } from "./AuthRateLimiter.js";
+export type {
+	AttemptDecision,
+	AuthRateLimiterConfig,
+} from "./AuthRateLimiter.js";
 export { AuthRateLimiter } from "./AuthRateLimiter.js";
 export { AbilitiesBuilder } from "./bouncer/AbilitiesBuilder.js";
 export { AuthorizationResponse } from "./bouncer/AuthorizationResponse.js";
@@ -85,6 +95,7 @@ export type {
 	MfaFactorStore,
 	MfaFactorSummary,
 	MfaManagerConfig,
+	MfaRateLimitConfig,
 } from "./mfa/MfaManager.js";
 export { MemoryMfaFactorStore, MfaManager } from "./mfa/MfaManager.js";
 export type {
@@ -98,12 +109,17 @@ export type {
 } from "./mfa/OtpProvider.js";
 export { MemoryOtpChallengeStore, OtpProvider } from "./mfa/OtpProvider.js";
 export type {
+	ReplayRedisClient,
 	TotpAlgorithm,
 	TotpConfig,
 	TotpEnrollment,
 	TotpReplayGuard,
 } from "./mfa/TotpProvider.js";
-export { MemoryTotpReplayGuard, TotpProvider } from "./mfa/TotpProvider.js";
+export {
+	MemoryTotpReplayGuard,
+	RedisTotpReplayGuard,
+	TotpProvider,
+} from "./mfa/TotpProvider.js";
 export type {
 	AuthenticationOptionsJSON,
 	AuthenticationResponseJSON,
@@ -171,9 +187,14 @@ export {
 	decodeBasicAuth,
 	safeCompare,
 } from "./strategies/BasicAuthStrategy.js";
-export type { JwtClaims, JwtStrategyConfig } from "./strategies/JwtStrategy.js";
+export type {
+	JwtClaims,
+	JwtStrategyConfig,
+	SignTokenOptions,
+} from "./strategies/JwtStrategy.js";
 export { generateJwtSecret, JwtStrategy } from "./strategies/JwtStrategy.js";
 export type {
+	RememberMeCookieAttributes,
 	SessionGuardState,
 	SessionStore,
 	SessionStrategyConfig,

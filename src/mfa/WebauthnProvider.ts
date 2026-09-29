@@ -488,7 +488,10 @@ export class WebauthnProvider {
 				alg: coseToKeyObject(authData.cosePublicKey).alg,
 			};
 		});
-		if (parsed === null) {
+		// The algorithms offered to the browser are a requirement, not a hint:
+		// an authenticator is free to answer with any key it has, and one this
+		// server did not accept must not be stored.
+		if (parsed === null || !this.#algorithms.includes(parsed.alg)) {
 			return { verified: false };
 		}
 		await this.#credentials.save({

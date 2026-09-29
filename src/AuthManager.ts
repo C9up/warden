@@ -7,13 +7,10 @@
 import { Authenticator } from "./Authenticator.js";
 import { WardenError } from "./errors.js";
 import type { WardenContext } from "./middleware.js";
-import { sanitizePayload } from "./sanitize.js";
-
-export { sanitizePayload };
-
 import { MemoryRightsStore } from "./rights/MemoryRightsStore.js";
 import { RightsResolver } from "./rights/RightsResolver.js";
 import type { EffectivePermissions, Scope } from "./rights/types.js";
+import { sanitizePayload } from "./sanitize.js";
 import type {
 	SessionGuardState,
 	SessionStore,
@@ -121,7 +118,7 @@ export interface AuthConfig {
 
 /** A strategy that can mint a token for a resolved user (e.g. JwtStrategy). */
 interface TokenIssuer {
-	signToken(user: UserPayload): string;
+	signToken(user: UserPayload, options?: { mfa?: boolean }): string;
 }
 
 /**
@@ -288,7 +285,12 @@ export class AuthManager {
 	 * / permissions / iat / exp / jti — are identical. Throws if the resolved
 	 * strategy can't issue tokens (e.g. session / API-key strategies).
 	 */
-	issueFor(user: UserPayload, strategyName?: string): string {
+	issueFor(
+		user: UserPayload,
+		strategyName?: string,
+		/** `{ mfa: true }` once the user completed an MFA step-up. */
+		options?: { mfa?: boolean },
+	): string {
 		const strategy = this.getStrategy(strategyName);
 		if (!isTokenIssuer(strategy)) {
 			throw new WardenError(
@@ -299,7 +301,7 @@ export class AuthManager {
 				},
 			);
 		}
-		return strategy.signToken(user);
+		return strategy.signToken(user, options);
 	}
 
 	/**

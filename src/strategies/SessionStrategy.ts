@@ -60,6 +60,21 @@ export interface SessionStrategyConfig {
 	 * default matches the `web` guard an app is most likely migrating.
 	 */
 	rememberMeCookieName?: string;
+	/**
+	 * Attributes of the remember-me cookie, over the defaults: `path: "/"`,
+	 * `sameSite: "lax"`, and `secure` in production. The cookie is a bearer
+	 * credential that lives for years, so it never leaves over plain HTTP or
+	 * rides a cross-site POST unless the app says so here.
+	 */
+	rememberMeCookie?: RememberMeCookieAttributes;
+}
+
+/** What an app may set on the remember-me cookie. */
+export interface RememberMeCookieAttributes {
+	path?: string;
+	domain?: string;
+	sameSite?: "lax" | "strict" | "none" | false;
+	secure?: boolean;
 }
 
 /** Two years, Adonis' `rememberMeTokensAge` default. */
@@ -102,6 +117,15 @@ export class SessionStrategy implements AuthStrategy {
 	#sessionKey: string;
 
 	constructor(config: SessionStrategyConfig) {
+		// A NaN age made every token's expiry NaN, which no "is it past?" test
+		// ever caught: the token never expired.
+		const age = config.rememberMeAge;
+		if (age !== undefined && (!Number.isSafeInteger(age) || age <= 0)) {
+			throw new WardenError(
+				"INVALID_CONFIG",
+				`rememberMeAge must be a positive whole number of seconds, got ${String(age)}`,
+			);
+		}
 		this.#config = config;
 		this.#sessionKey = config.sessionKey ?? "auth_user_id";
 	}
@@ -109,6 +133,11 @@ export class SessionStrategy implements AuthStrategy {
 	/** The cookie the remember-me token travels in. */
 	get rememberMeCookieName(): string {
 		return this.#config.rememberMeCookieName ?? "remember_web";
+	}
+
+	/** The remember-me cookie's attributes the app configured, if any. */
+	get rememberMeCookie(): RememberMeCookieAttributes | undefined {
+		return this.#config.rememberMeCookie;
 	}
 
 	/** Whether "keep me signed in" is wired at all. */
@@ -230,7 +259,12 @@ export class SessionStrategy implements AuthStrategy {
 			return { authenticated: false, error: "Invalid session data" };
 		const user = await this.#config.findUser(userId);
 		if (!user) return { authenticated: false, error: "User not found" };
-		return { authenticated: true, user };
+		// `mfa` is this SESSION's step-up, whatever `findUser` said (see
+		// markMfaVerified).
+		return {
+			authenticated: true,
+			user: { ...user, mfa: context.session.get(this.#mfaKey()) === true },
+		};
 	}
 
 	/**
@@ -254,6 +288,22 @@ export class SessionStrategy implements AuthStrategy {
 	seatSession(user: UserPayload, session: SessionStore): void {
 		session.regenerate();
 		session.put(this.#sessionKey, user.id);
+		// A new sign-in has not stepped up yet, whatever the session held before.
+		session.forget(this.#mfaKey());
+	}
+
+	/**
+	 * Record that this session completed an MFA step-up (`MfaManager.verify()`
+	 * succeeded), which `@RequireMfa()` requires. Cleared by the next sign-in
+	 * and by logout.
+	 */
+	markMfaVerified(session: SessionStore): void {
+		session.put(this.#mfaKey(), true);
+	}
+
+	/** The session key of the step-up marker, beside the user id's. */
+	#mfaKey(): string {
+		return `${this.#sessionKey}_mfa`;
 	}
 
 	async login(
@@ -294,6 +344,7 @@ export class SessionStrategy implements AuthStrategy {
 		state?: SessionGuardState,
 	): Promise<void> {
 		session.forget(this.#sessionKey);
+		session.forget(this.#mfaKey());
 		if (state) {
 			state.viaRemember = false;
 			state.attemptedViaRemember = false;

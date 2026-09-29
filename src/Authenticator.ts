@@ -25,9 +25,11 @@ import type { WardenContext } from "./middleware.js";
 import { sanitizePayload } from "./sanitize.js";
 import {
 	createSessionGuardState,
+	type RememberMeCookieAttributes,
 	type SessionGuardState,
 	type SessionStore,
 } from "./strategies/SessionStrategy.js";
+import { inProduction } from "./vendor/nodeEnv.js";
 
 /**
  * Guard names Warden accepts for the API-key / access-tokens driver. AdonisJS
@@ -76,6 +78,27 @@ interface RememberMeIssuer {
 	revokeRememberMeToken(cookieValue: unknown): Promise<void>;
 	readonly rememberMeCookieName: string;
 	readonly rememberMeAgeSeconds: number;
+	/** Overrides of the cookie attributes; the defaults below otherwise. */
+	readonly rememberMeCookie?: RememberMeCookieAttributes;
+}
+
+/**
+ * The remember-me cookie's attributes. Ream has no application-wide cookie
+ * defaults to inherit (AdonisJS takes them from `config/app.ts`), so they are
+ * set here: a credential that lives for years is `Secure` in production,
+ * `SameSite=Lax`, and scoped to the whole site.
+ */
+function rememberMeCookieOptions(
+	strategy: RememberMeIssuer,
+): Record<string, unknown> {
+	return {
+		path: "/",
+		sameSite: "lax",
+		secure: inProduction(),
+		...strategy.rememberMeCookie,
+		maxAge: strategy.rememberMeAgeSeconds,
+		httpOnly: true,
+	};
 }
 
 /**
@@ -115,7 +138,22 @@ function hasVerifyWithContext(
 export interface ExtractedCredentials {
 	bearerToken: string;
 	apiKey: string;
+	/** The whole `Authorization` header when its scheme is Basic, else `""`. */
+	basicAuth: string;
 	session: SessionStore | undefined;
+}
+
+/**
+ * The challenge of a Basic guard (`BasicAuthStrategy.challenge`), or undefined
+ * for any other guard. Structural, like the other capability probes: a Basic
+ * guard is one that has a challenge to send.
+ */
+function basicChallengeOf(
+	strategy: AuthStrategy | undefined,
+): string | undefined {
+	const challenge: unknown =
+		strategy === undefined ? undefined : Reflect.get(strategy, "challenge");
+	return typeof challenge === "string" ? challenge : undefined;
 }
 
 /**
@@ -151,10 +189,12 @@ export function extractCredentials(
 	const bearerToken = authHeader.startsWith("Bearer ")
 		? authHeader.slice(7)
 		: "";
+	// The scheme is case-insensitive (RFC 7235); the strategy decodes the rest.
+	const basicAuth = /^basic\s/i.test(authHeader) ? authHeader : "";
 	// HTTP header names are case-insensitive; runtimes lowercase incoming keys,
 	// so normalise the configured header name before the lookup.
 	const apiKey = headers[resolveApiKeyHeader(auth).toLowerCase()] ?? "";
-	return { bearerToken, apiKey, session: ctx.session };
+	return { bearerToken, apiKey, basicAuth, session: ctx.session };
 }
 
 /** Outcome of {@link tryAuthenticate}. */
@@ -172,16 +212,12 @@ export interface AuthAttempt {
  * Distinguishes crashes (strategy threw / `strategyCrash`) from credential
  * rejections so the caller can return 500 vs 401.
  */
-export async function tryAuthenticate(
+async function tryAuthenticate(
 	auth: AuthManager,
 	strategies: string[],
-	creds: {
-		bearerToken: string;
-		apiKey: string;
-		session: SessionStore | undefined;
-	},
+	creds: ExtractedCredentials,
 ): Promise<AuthAttempt> {
-	const { bearerToken, apiKey, session } = creds;
+	const { bearerToken, apiKey, basicAuth, session } = creds;
 	let result: AuthResult | null = null;
 	let viaGuard: string | undefined;
 	let attemptCount = 0;
@@ -205,6 +241,12 @@ export async function tryAuthenticate(
 				// The session path bypasses AuthManager.verify(), so apply the
 				// same prototype-pollution guard JWT / api-key users get there.
 				if (r.user) sanitizePayload(r.user);
+			} else if (basicChallengeOf(strategy) !== undefined) {
+				// A Basic guard reads the Authorization header itself, and only
+				// that: a Bearer token or an API key is not a password.
+				if (!basicAuth) continue;
+				attemptCount++;
+				r = await auth.verify(basicAuth, strategyName);
 			} else {
 				// Native-first credential, other transport as fallback so a
 				// single-credential client still authenticates (and an invalid
@@ -357,7 +399,7 @@ export class GuardAccessor {
 			this.#ctx.response,
 			strategy.rememberMeCookieName,
 			revived.cookieValue,
-			{ maxAge: strategy.rememberMeAgeSeconds, httpOnly: true },
+			rememberMeCookieOptions(strategy),
 		);
 		// Seat the session WITHOUT `login()`: that method means a password was
 		// typed, and it clears `viaRemember` — the one thing this path exists to
@@ -450,10 +492,12 @@ export class GuardAccessor {
 			);
 		}
 		try {
-			write.call(this.#ctx.response, strategy.rememberMeCookieName, value, {
-				maxAge: strategy.rememberMeAgeSeconds,
-				httpOnly: true,
-			});
+			write.call(
+				this.#ctx.response,
+				strategy.rememberMeCookieName,
+				value,
+				rememberMeCookieOptions(strategy),
+			);
 		} catch (err) {
 			// The row exists and the browser will never hold it: a credential
 			// nobody can reach is still one, so it does not survive the failure.
@@ -467,10 +511,38 @@ export class GuardAccessor {
 	#clearRememberMe(): void {
 		const strategy = strategyOrUndefined(this.#auth, this.#name);
 		if (!strategy || !isRememberMeIssuer(strategy)) return;
+		// Cleared on the path and domain it was set on: a browser keys cookies
+		// by both, and a clear elsewhere leaves the credential in place.
+		const { path, domain } = rememberMeCookieOptions(strategy);
 		this.#ctx.response.clearCookie?.call(
 			this.#ctx.response,
 			strategy.rememberMeCookieName,
+			{ path, domain },
 		);
+	}
+
+	/**
+	 * Record that this session completed an MFA step-up, once
+	 * `MfaManager.verify()` succeeded — what `@RequireMfa()` requires (session
+	 * guards; a JWT carries it as `issueFor(user, guard, { mfa: true })`).
+	 */
+	markMfaVerified(): void {
+		const strategy = strategyOrUndefined(this.#auth, this.#name);
+		const mark = strategy
+			? Reflect.get(strategy, "markMfaVerified")
+			: undefined;
+		if (typeof mark !== "function") {
+			throw new WardenError(
+				"INVALID_CONFIG",
+				`Guard '${this.#name}' keeps no session to record an MFA step-up in.`,
+				{
+					hint: "Sign a token with the step-up instead: auth.issueFor(user, guard, { mfa: true }).",
+				},
+			);
+		}
+		mark.call(strategy, this.#requireSession());
+		const user = this.user;
+		if (user) user.mfa = true;
 	}
 
 	/** Log the current user out of this guard (session guards). */
@@ -654,11 +726,18 @@ export class Authenticator {
 				{ status: 500 },
 			);
 		}
+		// A Basic guard among those tried: the 401 must carry its challenge,
+		// or the browser never asks for credentials (AdonisJS basic_auth does
+		// the same).
+		const challenge = names
+			.map((name) => basicChallengeOf(strategyOrUndefined(this.#auth, name)))
+			.find((value) => value !== undefined);
 		const failure = new E_UNAUTHORIZED_ACCESS(
 			result?.error ?? "Unauthorized access",
 			{
 				guardDriverName: guardName,
 				redirectTo: hasSessionStrategy ? options?.loginRoute : undefined,
+				challenge,
 			},
 		);
 		this.#auth.emitAuthEvent(

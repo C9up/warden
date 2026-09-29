@@ -154,7 +154,7 @@ describe("warden > MfaManager — rate limit", () => {
 		expect(await m.verify(USER.id, "000000")).toBe(false);
 		expect(await m.verify(USER.id, "000001")).toBe(false);
 		expect(await m.verify(USER.id, "000002")).toBe(false);
-		expect(m.isLocked(USER.id)).toBe(true);
+		expect(await m.isLocked(USER.id)).toBe(true);
 		expect(await m.verify(USER.id, totp.generate(secret))).toBe(false);
 	});
 
@@ -164,10 +164,10 @@ describe("warden > MfaManager — rate limit", () => {
 		expect(await m.verify(USER.id, "000001")).toBe(false);
 		// A valid code succeeds and clears the counter…
 		expect(await m.verify(USER.id, totp.generate(secret))).toBe(true);
-		expect(m.isLocked(USER.id)).toBe(false);
+		expect(await m.isLocked(USER.id)).toBe(false);
 		// …so two further failures do not lock (would be 4 ≥ 3 without the reset).
 		expect(await m.verify(USER.id, "000000")).toBe(false);
 		expect(await m.verify(USER.id, "000001")).toBe(false);
-		expect(m.isLocked(USER.id)).toBe(false);
+		expect(await m.isLocked(USER.id)).toBe(false);
 	});
 });

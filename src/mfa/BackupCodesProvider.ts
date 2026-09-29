@@ -8,8 +8,8 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { WardenError } from "../errors.js";
 import { base32Encode } from "./base32.js";
+import { assertIntegerIn } from "./TotpProvider.js";
 
 export interface BackupCodesConfig {
 	/** How many codes to generate. Default `10`. */
@@ -27,8 +27,15 @@ export interface BackupCodesResult {
 
 export interface BackupCodeVerification {
 	ok: boolean;
-	/** The hash list with the consumed code removed (persist this on success). */
+	/** The hash list with the consumed code removed. */
 	remaining: string[];
+	/**
+	 * The stored hash the code matched. Consume THIS one atomically
+	 * (`MfaFactorStore.consumeBackupHash`) rather than saving `remaining`: two
+	 * requests with the same code both computed the same `remaining`, and both
+	 * were accepted.
+	 */
+	matched?: string;
 }
 
 const DEFAULTS = { count: 10, length: 10 };
@@ -39,18 +46,9 @@ export class BackupCodesProvider {
 
 	constructor(config: BackupCodesConfig = {}) {
 		this.#cfg = { ...DEFAULTS, ...config };
-		if (this.#cfg.count < 1) {
-			throw new WardenError(
-				"INVALID_CONFIG",
-				`backup code count must be >= 1, got ${this.#cfg.count}`,
-			);
-		}
-		if (this.#cfg.length < 8) {
-			throw new WardenError(
-				"INVALID_CONFIG",
-				`backup code length must be >= 8 for adequate entropy, got ${this.#cfg.length}`,
-			);
-		}
+		assertIntegerIn("backup code count", this.#cfg.count, 1, 100);
+		// At least 8 characters for adequate entropy.
+		assertIntegerIn("backup code length", this.#cfg.length, 8, 64);
 	}
 
 	/** Generate a fresh batch of codes plus the hashes to persist. */
@@ -90,6 +88,7 @@ export class BackupCodesProvider {
 		return {
 			ok: true,
 			remaining: hashes.filter((_, i) => i !== matchedIndex),
+			matched: hashes[matchedIndex],
 		};
 	}
 }

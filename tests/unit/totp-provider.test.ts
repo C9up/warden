@@ -106,7 +106,9 @@ describe("warden > TotpProvider", () => {
 	});
 
 	it("rejects an out-of-range digit count at construction", () => {
-		expect(() => new TotpProvider({ digits: 9 })).toThrow(/digits must be 6-8/);
+		expect(() => new TotpProvider({ digits: 9 })).toThrow(
+			/TOTP digits must be a whole number from 6 to 8/,
+		);
 	});
 });
 
@@ -146,11 +148,12 @@ describe("warden > TOTP replay", () => {
 	});
 
 	it("takes a shared guard, for an app on several instances", async () => {
-		const seen = new Map<string, number>();
+		const seen = new Set<string>();
 		const shared = {
-			used: (key: string) => seen.has(key),
-			remember: (key: string) => {
-				seen.set(key, 1);
+			claim: (key: string) => {
+				if (seen.has(key)) return false;
+				seen.add(key);
+				return true;
 			},
 		};
 		const one = new TotpProvider({ replayGuard: shared });

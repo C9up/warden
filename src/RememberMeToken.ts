@@ -18,6 +18,12 @@
  *  3. **A used token is recycled.** Authenticating rotates the secret and
  *     invalidates the old one, so a stolen cookie stops working the moment the
  *     legitimate user comes back.
+ *
+ * One property goes further than upstream: the rotation is a compare-and-set.
+ * Upstream reads, compares, then replaces, so two requests carrying the same
+ * cookie both pass the comparison and both get a fresh secret — a stolen
+ * cookie replayed alongside the real one survives. Here the store replaces the
+ * hash only if it is still the one presented; the second request loses.
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -43,8 +49,18 @@ export interface StoredRememberMeToken {
 export interface RememberMeTokenDriver {
 	create(token: StoredRememberMeToken): Promise<void>;
 	find(identifier: string): Promise<StoredRememberMeToken | null>;
-	/** Replace the hash + expiry of an existing row (recycling). */
-	update(identifier: string, hash: string, expiresAt: number): Promise<void>;
+	/**
+	 * Replace the hash + expiry of a row, ONLY if its hash is still
+	 * `previousHash` — atomically (`UPDATE … WHERE identifier = ? AND hash = ?`
+	 * and the affected row count, in SQL). Returns whether it replaced it: a
+	 * `false` means another request consumed the token first.
+	 */
+	update(
+		identifier: string,
+		previousHash: string,
+		hash: string,
+		expiresAt: number,
+	): Promise<boolean>;
 	delete(identifier: string): Promise<void>;
 	deleteAllForUser(userId: string | number): Promise<void>;
 }
@@ -162,7 +178,9 @@ export async function verifyAndRecycleRememberMeToken(
 	const stored = await driver.find(decoded.identifier);
 	if (!stored) return null;
 
-	if (stored.expiresAt <= Date.now()) {
+	// Written as "not in the future" so an expiry that is not a number — a
+	// NaN from a bad age — counts as expired instead of as never.
+	if (!(stored.expiresAt > Date.now())) {
 		// Expired rows are removed on sight rather than left to a cleanup job.
 		await driver.delete(stored.identifier);
 		return null;
@@ -174,7 +192,15 @@ export async function verifyAndRecycleRememberMeToken(
 
 	const secret = randomBytes(secretLength).toString("base64url");
 	const expiresAt = Date.now() + ageSeconds * 1000;
-	await driver.update(stored.identifier, hashSecret(secret), expiresAt);
+	const recycled = await driver.update(
+		stored.identifier,
+		stored.hash,
+		hashSecret(secret),
+		expiresAt,
+	);
+	// Another request holding the same cookie rotated it first: this one is
+	// the replay, whichever of the two it is.
+	if (!recycled) return null;
 
 	return {
 		userId: stored.tokenableId,
@@ -197,17 +223,19 @@ export class MemoryRememberMeTokenDriver implements RememberMeTokenDriver {
 
 	async update(
 		identifier: string,
+		previousHash: string,
 		hash: string,
 		expiresAt: number,
-	): Promise<void> {
+	): Promise<boolean> {
 		const row = this.#rows.get(identifier);
-		if (!row) return;
+		if (!row || row.hash !== previousHash) return false;
 		this.#rows.set(identifier, {
 			...row,
 			hash,
 			expiresAt,
 			updatedAt: Date.now(),
 		});
+		return true;
 	}
 
 	async delete(identifier: string): Promise<void> {
@@ -345,9 +373,9 @@ export class RememberMeToken {
 		};
 	}
 
-	/** Whether the token is past its expiry. */
+	/** Whether the token is past its expiry (an invalid date counts as past). */
 	isExpired(): boolean {
-		return this.expiresAt.getTime() <= Date.now();
+		return !(this.expiresAt.getTime() > Date.now());
 	}
 
 	/** Constant-time check of a presented secret against the stored hash. */

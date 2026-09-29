@@ -62,12 +62,14 @@ const recoveryCodes = await mfa.createBackupCodes(user.id)  // show once
 
 // At sign-in step-up: TOTP code OR a backup code (rate-limited)
 if (await mfa.verify(user.id, submittedCode)) {
-  // issue a JWT carrying `mfa: true`
+  const token = auth.issueFor(user, 'jwt', { mfa: true })  // JWT: the token carries the step-up
+  // or, on a session guard: ctx.auth.use('web').markMfaVerified()
 }
 ```
 
-Gate sensitive routes — the middleware returns `403 MFA_REQUIRED` unless the
-authenticated user's payload carries a truthy `mfa` claim:
+Gate sensitive routes — the middleware returns `403 E_WARDEN_MFA_REQUIRED` unless
+the request's credential completed the step-up (a JWT signed with `{ mfa: true }`,
+or a session marked with `markMfaVerified()`):
 
 ```typescript
 class TransferController {

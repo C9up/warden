@@ -478,12 +478,14 @@ describe("warden > security hardening", () => {
 		expect(sourceUser.permissions).toEqual(["users.read"]);
 	});
 
-	it("AuthRateLimiter normalizes identifier case/spacing", () => {
+	it("AuthRateLimiter normalizes identifier case/spacing", async () => {
 		const limiter = new AuthRateLimiter({ maxAttempts: 2, windowSeconds: 60 });
-		limiter.recordFailure("127.0.0.1", "  USER@EXAMPLE.COM ");
-		expect(limiter.check("127.0.0.1", "user@example.com")).toBe(true);
-		limiter.recordFailure("127.0.0.1", "user@example.com");
-		expect(limiter.check("127.0.0.1", "USER@example.com")).toBe(false);
+		const keys = (email: string) =>
+			AuthRateLimiter.loginKeys("127.0.0.1", email);
+		await limiter.attempt(...keys("  USER@EXAMPLE.COM "));
+		expect(await limiter.isBlocked(...keys("user@example.com"))).toBe(false);
+		await limiter.attempt(...keys("user@example.com"));
+		expect(await limiter.isBlocked(...keys("USER@example.com"))).toBe(true);
 	});
 });
 

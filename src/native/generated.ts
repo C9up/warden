@@ -7,17 +7,3 @@
 export declare function jwtSign(payload: string, secret: string): string;
 
 export declare function jwtVerify(token: string, secret: string): string;
-
-export declare function constantTimeEq(a: string, b: string): boolean;
-
-export declare function hmacSign(data: string, secret: string): string;
-
-export declare function hmacVerify(
-	data: string,
-	signature: string,
-	secret: string,
-): boolean;
-
-export declare function randomBytes(len: number): string;
-
-export declare function randomHex(len: number): string;

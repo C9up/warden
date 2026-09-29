@@ -97,5 +97,13 @@ export function resolveExpiresInSeconds(
 			`Warden: token lifetime must be a positive duration, got ${JSON.stringify(chosen)}`,
 		);
 	}
+	// A token's `exp` is whole seconds: "500ms" made it fractional, and the
+	// engine reads a fractional `exp` as a missing one — the token was dead on
+	// issue.
+	if (!Number.isInteger(seconds)) {
+		throw new TypeError(
+			`Warden: token lifetime must be a whole number of seconds, got ${JSON.stringify(chosen)}`,
+		);
+	}
 	return seconds;
 }

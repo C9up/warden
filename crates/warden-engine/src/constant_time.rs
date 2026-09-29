@@ -13,11 +13,6 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     (len_eq & content_eq).into()
 }
 
-/// Compare two strings in constant time.
-pub fn constant_time_str_eq(a: &str, b: &str) -> bool {
-    constant_time_eq(a.as_bytes(), b.as_bytes())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -25,32 +20,28 @@ mod tests {
     #[test]
     fn test_equal_values() {
         assert!(constant_time_eq(b"hello", b"hello"));
-        assert!(constant_time_str_eq("token-abc-123", "token-abc-123"));
     }
 
     #[test]
     fn test_different_values() {
         assert!(!constant_time_eq(b"hello", b"world"));
-        assert!(!constant_time_str_eq("token-abc-123", "token-abc-124"));
     }
 
     #[test]
     fn test_different_lengths() {
         assert!(!constant_time_eq(b"short", b"longer"));
-        assert!(!constant_time_str_eq("a", "ab"));
     }
 
     #[test]
     fn test_empty() {
         assert!(constant_time_eq(b"", b""));
-        assert!(constant_time_str_eq("", ""));
     }
 
     #[test]
     fn test_nearly_identical() {
-        assert!(!constant_time_str_eq(
-            "abcdefghijklmnopqrstuvwxyz0",
-            "abcdefghijklmnopqrstuvwxyz1"
+        assert!(!constant_time_eq(
+            b"abcdefghijklmnopqrstuvwxyz0",
+            b"abcdefghijklmnopqrstuvwxyz1"
         ));
     }
 }

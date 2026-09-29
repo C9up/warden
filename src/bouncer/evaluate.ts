@@ -39,7 +39,7 @@ export const defaultResponseBuilder: ResponseBuilder = (value) => {
  * bare `return false` a house message and status instead of a naked 403
  * (AdonisJS `Bouncer.responseBuilder`).
  */
-export function normalizeResponse(
+function normalizeResponse(
 	value: boolean | AuthorizationResponse,
 	builder: ResponseBuilder = defaultResponseBuilder,
 ): AuthorizationResponse {

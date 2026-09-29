@@ -609,3 +609,26 @@ describe("warden > the challenge TTL has to be a duration", () => {
 		}
 	});
 });
+
+describe("warden > WebauthnProvider — offered algorithms", () => {
+	it("refuses a key whose algorithm the server did not offer", async () => {
+		const credentials = new MemoryWebauthnCredentialStore();
+		// RS256 only; the fake authenticator answers with an ES256 key.
+		const p = new WebauthnProvider({
+			rpName: "Fluveo",
+			rpID: RP_ID,
+			origin: ORIGIN,
+			supportedAlgorithms: [-257],
+			credentialStore: credentials,
+		});
+		const auth = new FakeAuthenticator();
+		const { options, state } = await p.startRegistration(USER);
+		const res = await p.finishRegistration(
+			state,
+			USER.id,
+			auth.register(options.challenge),
+		);
+		expect(res.verified).toBe(false);
+		expect(await credentials.findByUser(USER.id)).toEqual([]);
+	});
+});

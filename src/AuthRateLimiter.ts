@@ -1,105 +1,110 @@
 /**
- * AuthRateLimiter — brute force protection for login endpoints.
+ * AuthRateLimiter — brute force protection for login endpoints, and the
+ * lockout behind `MfaManager.verify()`.
  *
- * Dual-key rate limiting: IP + email to prevent distributed attacks.
+ * An attempt is counted BEFORE the credential is checked, by one atomic
+ * increment per key ({@link AttemptStore}): checking first and recording the
+ * failure afterwards let a burst of concurrent attempts all pass the check.
+ * A success clears the keys.
+ *
+ * A login is counted under two keys, its IP and its identifier
+ * ({@link AuthRateLimiter.loginKeys}), so neither spraying one password across
+ * accounts from one address nor one account from many addresses gets through.
+ *
+ *   const keys = AuthRateLimiter.loginKeys(ctx.request.ip(), email)
+ *   if (!(await limiter.attempt(...keys)).allowed) return tooManyAttempts()
+ *   const user = await verify(email, password)
+ *   if (user) await limiter.clear(...keys)
  *
  * @implements MISS-26
  */
 
+import { type AttemptStore, MemoryAttemptStore } from "./AttemptStore.js";
+import { WardenError } from "./errors.js";
+
 export interface AuthRateLimiterConfig {
-	maxAttempts?: number; // default 5
-	windowSeconds?: number; // default 900 (15 min)
+	/** Attempts allowed per window, per key. Default 5. */
+	maxAttempts?: number;
+	/** How long a window lasts, in seconds. Default 900 (15 min). */
+	windowSeconds?: number;
+	/**
+	 * Where the counts live. Default: this process's memory. A cluster passes a
+	 * shared one ({@link RedisAttemptStore}), or a lockout holds only on the
+	 * instance that counted it.
+	 */
+	store?: AttemptStore;
 }
 
-interface AttemptEntry {
-	count: number;
-	resetAt: number;
+/** What {@link AuthRateLimiter.attempt} decided. */
+export interface AttemptDecision {
+	/** Whether this attempt may go on to the credential check. */
+	allowed: boolean;
+	/** Attempts left on the most-used key. */
+	remaining: number;
+	/** Seconds until the most-used key's window ends. */
+	retryAfterSeconds: number;
 }
 
 export class AuthRateLimiter {
-	#maxAttempts: number;
-	#window: number;
-	#store: Map<string, AttemptEntry> = new Map();
-	#maxStoreSize = 100_000;
+	readonly #maxAttempts: number;
+	readonly #windowSeconds: number;
+	readonly #store: AttemptStore;
 
-	constructor(config?: AuthRateLimiterConfig) {
-		this.#maxAttempts = config?.maxAttempts ?? 5;
-		if (this.#maxAttempts <= 0) this.#maxAttempts = 1;
-		this.#window = (config?.windowSeconds ?? 900) * 1000;
-		if (this.#window <= 0) this.#window = 900_000; // prevent bypass via 0/negative
+	constructor(config: AuthRateLimiterConfig = {}) {
+		this.#maxAttempts = positiveInteger("maxAttempts", config.maxAttempts ?? 5);
+		this.#windowSeconds = positiveInteger(
+			"windowSeconds",
+			config.windowSeconds ?? 900,
+		);
+		this.#store = config.store ?? new MemoryAttemptStore();
 	}
 
-	/** Check if an attempt is allowed. Returns false if rate limited. */
-	check(ip: string, identifier: string): boolean {
-		const now = Date.now();
-		const ipNorm = normalizeIp(ip);
-		const identifierNorm = normalizeIdentifier(identifier);
-		// Dual key: limit both by IP and by identifier (email)
-		const ipKey = `ip:${ipNorm}`;
-		const idKey = `id:${identifierNorm}`;
-
-		return this.#checkKey(ipKey, now) && this.#checkKey(idKey, now);
+	/** The keys a login attempt is counted under: its IP and its identifier. */
+	static loginKeys(ip: string, identifier: string): string[] {
+		return [`ip:${ip.trim()}`, `id:${identifier.trim().toLowerCase()}`];
 	}
 
-	/** Record a failed attempt. */
-	recordFailure(ip: string, identifier: string): void {
-		const now = Date.now();
-		const ipNorm = normalizeIp(ip);
-		const identifierNorm = normalizeIdentifier(identifier);
-		this.#increment(`ip:${ipNorm}`, now);
-		this.#increment(`id:${identifierNorm}`, now);
-	}
-
-	/** Reset counters on successful login. */
-	recordSuccess(ip: string, identifier: string): void {
-		const ipNorm = normalizeIp(ip);
-		const identifierNorm = normalizeIdentifier(identifier);
-		this.#store.delete(`ip:${ipNorm}`);
-		this.#store.delete(`id:${identifierNorm}`);
-	}
-
-	/** Get remaining attempts for an identifier. */
-	remaining(ip: string, identifier: string): number {
-		const ipNorm = normalizeIp(ip);
-		const identifierNorm = normalizeIdentifier(identifier);
-		const ipEntry = this.#store.get(`ip:${ipNorm}`);
-		const idEntry = this.#store.get(`id:${identifierNorm}`);
-		const ipRemaining = ipEntry
-			? Math.max(0, this.#maxAttempts - ipEntry.count)
-			: this.#maxAttempts;
-		const idRemaining = idEntry
-			? Math.max(0, this.#maxAttempts - idEntry.count)
-			: this.#maxAttempts;
-		return Math.min(ipRemaining, idRemaining);
-	}
-
-	#checkKey(key: string, now: number): boolean {
-		const entry = this.#store.get(key);
-		if (!entry || entry.resetAt < now) return true;
-		return entry.count < this.#maxAttempts;
-	}
-
-	#increment(key: string, now: number): void {
-		// Evict expired entries when store grows too large (prevent OOM)
-		if (this.#store.size > this.#maxStoreSize) {
-			for (const [k, v] of this.#store) {
-				if (v.resetAt < now) this.#store.delete(k);
-			}
+	/**
+	 * Count an attempt under every key, and say whether it may go on. Call it
+	 * BEFORE checking the credential; a refused attempt must not reach it.
+	 */
+	async attempt(...keys: string[]): Promise<AttemptDecision> {
+		const counts = await Promise.all(
+			keys.map((key) => this.#store.increment(key, this.#windowSeconds)),
+		);
+		let highest = { count: 0, resetSeconds: 0 };
+		for (const counted of counts) {
+			if (counted.count > highest.count) highest = counted;
 		}
+		return {
+			allowed: highest.count <= this.#maxAttempts,
+			remaining: Math.max(0, this.#maxAttempts - highest.count),
+			retryAfterSeconds: highest.resetSeconds,
+		};
+	}
 
-		let entry = this.#store.get(key);
-		if (!entry || entry.resetAt < now) {
-			entry = { count: 0, resetAt: now + this.#window };
-			this.#store.set(key, entry);
-		}
-		entry.count++;
+	/** Whether any key has used up its attempts, without counting one. */
+	async isBlocked(...keys: string[]): Promise<boolean> {
+		const counts = await Promise.all(keys.map((key) => this.#store.count(key)));
+		return counts.some((count) => count >= this.#maxAttempts);
+	}
+
+	/** Forget the keys' attempts — after a success. */
+	async clear(...keys: string[]): Promise<void> {
+		await Promise.all(keys.map((key) => this.#store.reset(key)));
 	}
 }
 
-function normalizeIdentifier(identifier: string): string {
-	return identifier.trim().toLowerCase();
-}
-
-function normalizeIp(ip: string): string {
-	return ip.trim();
+/**
+ * A limit that would not limit is refused: `Infinity` attempts or a window of
+ * 0 turned the protection off, silently.
+ */
+function positiveInteger(field: string, value: number): number {
+	if (!Number.isSafeInteger(value) || value <= 0) {
+		throw new WardenError(
+			"INVALID_CONFIG",
+			`AuthRateLimiter ${field} must be a positive whole number, got ${String(value)}`,
+		);
+	}
+	return value;
 }

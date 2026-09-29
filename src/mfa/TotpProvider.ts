@@ -13,6 +13,23 @@ import { base32Decode, base32Encode } from "./base32.js";
 
 export type TotpAlgorithm = "SHA1" | "SHA256" | "SHA512";
 
+const TOTP_ALGORITHMS: readonly string[] = ["SHA1", "SHA256", "SHA512"];
+
+/** Throw INVALID_CONFIG unless `value` is an integer in `[min, max]`. */
+export function assertIntegerIn(
+	what: string,
+	value: number,
+	min: number,
+	max: number,
+): void {
+	if (!Number.isInteger(value) || value < min || value > max) {
+		throw new WardenError(
+			"INVALID_CONFIG",
+			`${what} must be a whole number from ${min} to ${max}, got ${String(value)}`,
+		);
+	}
+}
+
 export interface TotpConfig {
 	/** HMAC algorithm. Default `SHA1` (authenticator-app compatible). */
 	algorithm?: TotpAlgorithm;
@@ -43,12 +60,18 @@ export interface TotpConfig {
  *
  * Keys are opaque digests, never the secret itself: a store may be shared, and
  * a guard that leaks the seed is worse than the replay it prevents.
+ *
+ * One operation, not a "was it used?" read followed by a "remember it" write:
+ * between the two, a second request with the same code read "unused" too, and
+ * both were accepted.
  */
 export interface TotpReplayGuard {
-	/** True when this exact code has already been accepted. */
-	used(key: string): boolean | Promise<boolean>;
-	/** Record it as used; `ttlMs` is how long it could still be replayed. */
-	remember(key: string, ttlMs: number): void | Promise<void>;
+	/**
+	 * Record `key` as used for `ttlMs` — ATOMICALLY, only if it is not already
+	 * recorded (Redis `SET key 1 PX ttl NX`). True when this call recorded it:
+	 * the code is accepted. False when it was already used.
+	 */
+	claim(key: string, ttlMs: number): boolean | Promise<boolean>;
 }
 
 /**
@@ -59,22 +82,63 @@ export interface TotpReplayGuard {
 export class MemoryTotpReplayGuard implements TotpReplayGuard {
 	readonly #seen = new Map<string, number>();
 
-	used(key: string): boolean {
-		const expiresAt = this.#seen.get(key);
-		if (expiresAt === undefined) return false;
-		if (expiresAt <= Date.now()) {
-			this.#seen.delete(key);
-			return false;
-		}
-		return true;
-	}
-
-	remember(key: string, ttlMs: number): void {
+	/** Synchronous: nothing can run between the check and the write. */
+	claim(key: string, ttlMs: number): boolean {
 		const now = Date.now();
 		for (const [seenKey, expiresAt] of this.#seen) {
 			if (expiresAt <= now) this.#seen.delete(seenKey);
 		}
+		if (this.#seen.has(key)) return false;
 		this.#seen.set(key, now + ttlMs);
+		return true;
+	}
+}
+
+/** What {@link RedisTotpReplayGuard} needs of a Redis client. */
+export interface ReplayRedisClient {
+	set(
+		key: string,
+		value: string,
+		expiry: "PX",
+		ttlMs: number,
+		mode: "NX",
+	): Promise<unknown>;
+}
+
+/**
+ * A replay guard shared across instances: `SET key 1 PX ttl NX` records a code
+ * only if no instance did first. Needed as soon as the app runs on more than
+ * one, or the same code works once per instance.
+ */
+export class RedisTotpReplayGuard implements TotpReplayGuard {
+	readonly #source: ReplayRedisClient | (() => Promise<ReplayRedisClient>);
+	#resolved: ReplayRedisClient | undefined;
+	readonly #prefix: string;
+
+	constructor(
+		source: ReplayRedisClient | (() => Promise<ReplayRedisClient>),
+		options: { prefix?: string } = {},
+	) {
+		this.#source = source;
+		this.#prefix = options.prefix ?? "warden:totp";
+	}
+
+	async claim(key: string, ttlMs: number): Promise<boolean> {
+		if (this.#resolved === undefined) {
+			this.#resolved =
+				typeof this.#source === "function"
+					? await this.#source()
+					: this.#source;
+		}
+		// Redis refuses PX 0; a code with no replay time left still gets 1 ms.
+		const result = await this.#resolved.set(
+			`${this.#prefix}:${key}`,
+			"1",
+			"PX",
+			Math.max(1, Math.ceil(ttlMs)),
+			"NX",
+		);
+		return result === "OK";
 	}
 }
 
@@ -106,10 +170,16 @@ export class TotpProvider {
 			replayGuard === null
 				? null
 				: (replayGuard ?? new MemoryTotpReplayGuard());
-		if (this.#cfg.digits < 6 || this.#cfg.digits > 8) {
+		// Every number bounds a loop or a buffer: a period of 0 crashed code
+		// generation, a window of Infinity never ended the verification loop,
+		// and NaN slips past a `<` comparison.
+		assertIntegerIn("TOTP digits", this.#cfg.digits, 6, 8);
+		assertIntegerIn("TOTP period", this.#cfg.period, 1, 3600);
+		assertIntegerIn("TOTP window", this.#cfg.window, 0, 10);
+		if (!TOTP_ALGORITHMS.includes(this.#cfg.algorithm)) {
 			throw new WardenError(
 				"INVALID_CONFIG",
-				`TOTP digits must be 6-8, got ${this.#cfg.digits}`,
+				`TOTP algorithm must be one of ${TOTP_ALGORITHMS.join(", ")}, got ${String(this.#cfg.algorithm)}`,
 			);
 		}
 	}
@@ -169,13 +239,11 @@ export class TotpProvider {
 			// for the whole window — with the default settings, ~90 seconds in
 			// which a shoulder-surfed or intercepted code still works.
 			const seenKey = this.#replayKey(secret, counter);
-			if (await this.#replayGuard.used(seenKey)) return false;
-			// Remember it for as long as it could still be replayed: until the
-			// last step that would accept it has passed.
+			// Claimed for as long as it could still be replayed: until the last
+			// step that would accept it has passed.
 			const ttlMs =
 				(counter + this.#cfg.window + 1) * this.#cfg.period * 1000 - atMs;
-			await this.#replayGuard.remember(seenKey, Math.max(ttlMs, 0));
-			return true;
+			return this.#replayGuard.claim(seenKey, Math.max(ttlMs, 0));
 		}
 		return false;
 	}

@@ -176,7 +176,8 @@ describe("warden > expressMiddleware", () => {
 		expect(out.captured.status).toBeUndefined();
 		expect(out.nextCalled).toBe(true);
 		expect(out.req.auth).toMatchObject({ authenticated: true });
-		expect(out.req.user).toEqual(SAMPLE_USER);
+		// `mfa` is the token's step-up claim: this one never stepped up.
+		expect(out.req.user).toEqual({ ...SAMPLE_USER, mfa: false });
 	});
 
 	it("returns 401 on a malformed Bearer token", async () => {

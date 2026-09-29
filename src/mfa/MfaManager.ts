@@ -10,6 +10,8 @@
  */
 
 import { randomBytes } from "node:crypto";
+import type { AttemptStore } from "../AttemptStore.js";
+import { AuthRateLimiter } from "../AuthRateLimiter.js";
 import { WardenError } from "../errors.js";
 import type { BackupCodesProvider } from "./BackupCodesProvider.js";
 import type { TotpProvider } from "./TotpProvider.js";
@@ -43,6 +45,13 @@ export interface MfaFactorStore {
 	findById(id: string): Promise<MfaFactor | null>;
 	findByUser(userId: string): Promise<MfaFactor[]>;
 	delete(id: string): Promise<void>;
+	/**
+	 * Remove `hash` from the factor's backup hashes — ATOMICALLY, and only if
+	 * it is still there (an `UPDATE … WHERE` on the hash, or a Redis `SREM`).
+	 * True when this call removed it: the code is accepted, once. A read, a
+	 * filter and a save let two requests with the same code both succeed.
+	 */
+	consumeBackupHash(factorId: string, hash: string): Promise<boolean>;
 }
 
 export class MemoryMfaFactorStore implements MfaFactorStore {
@@ -59,13 +68,36 @@ export class MemoryMfaFactorStore implements MfaFactorStore {
 	async delete(id: string): Promise<void> {
 		this.#store.delete(id);
 	}
+	/** Synchronous between read and write: nothing interleaves. */
+	async consumeBackupHash(factorId: string, hash: string): Promise<boolean> {
+		const factor = this.#store.get(factorId);
+		const hashes = factor?.backupHashes;
+		if (
+			factor === undefined ||
+			hashes === undefined ||
+			!hashes.includes(hash)
+		) {
+			return false;
+		}
+		this.#store.set(factorId, {
+			...factor,
+			backupHashes: hashes.filter((stored) => stored !== hash),
+		});
+		return true;
+	}
 }
 
 export interface MfaRateLimitConfig {
-	/** Failed verifications allowed per user before lockout. Default `5`. */
+	/** Verifications allowed per user before lockout. Default `5`. */
 	maxAttempts?: number;
 	/** Lockout / counter window in seconds. Default `900` (15 min). */
 	windowSeconds?: number;
+	/**
+	 * Where the counts live. Default: this process's memory. A cluster passes a
+	 * shared one (`RedisAttemptStore`), or a lockout holds only on the instance
+	 * that counted it.
+	 */
+	store?: AttemptStore;
 }
 
 export interface MfaManagerConfig {
@@ -78,19 +110,12 @@ export interface MfaManagerConfig {
 	rateLimit?: MfaRateLimitConfig;
 }
 
-interface AttemptEntry {
-	count: number;
-	resetAt: number;
-}
-
 export class MfaManager {
 	readonly #issuer: string;
 	readonly #totp?: TotpProvider;
 	readonly #backupCodes?: BackupCodesProvider;
 	readonly #store: MfaFactorStore;
-	readonly #maxAttempts: number;
-	readonly #windowMs: number;
-	readonly #attempts = new Map<string, AttemptEntry>();
+	readonly #limiter: AuthRateLimiter;
 
 	constructor(config: MfaManagerConfig) {
 		if (!config?.issuer) {
@@ -100,8 +125,11 @@ export class MfaManager {
 		this.#totp = config.totp;
 		this.#backupCodes = config.backupCodes;
 		this.#store = config.store ?? new MemoryMfaFactorStore();
-		this.#maxAttempts = config.rateLimit?.maxAttempts ?? 5;
-		this.#windowMs = (config.rateLimit?.windowSeconds ?? 900) * 1000;
+		this.#limiter = new AuthRateLimiter({
+			maxAttempts: config.rateLimit?.maxAttempts ?? 5,
+			windowSeconds: config.rateLimit?.windowSeconds ?? 900,
+			store: config.rateLimit?.store,
+		});
 	}
 
 	// ── TOTP enrollment ──────────────────────────────────────────────
@@ -201,8 +229,12 @@ export class MfaManager {
 				continue;
 			}
 			const result = provider.verify(factor.backupHashes, code);
-			if (result.ok) {
-				await this.#store.save({ ...factor, backupHashes: result.remaining });
+			// Only the request that removes the hash wins; one that verified the
+			// same code a moment later finds it gone.
+			if (
+				result.matched !== undefined &&
+				(await this.#store.consumeBackupHash(factor.id, result.matched))
+			) {
 				return true;
 			}
 		}
@@ -216,7 +248,11 @@ export class MfaManager {
 	 * factors first, then falls back to consuming a backup code.
 	 */
 	async verify(userId: string, code: string): Promise<boolean> {
-		if (this.#isLocked(userId)) {
+		// Counted BEFORE the code is checked, by one atomic increment: reading
+		// "not locked" first and counting the failure after let a burst of
+		// concurrent attempts all reach the providers.
+		const key = lockoutKey(userId);
+		if (!(await this.#limiter.attempt(key)).allowed) {
 			return false;
 		}
 		let ok = false;
@@ -228,11 +264,7 @@ export class MfaManager {
 		) {
 			ok = true;
 		}
-		if (ok) {
-			this.#attempts.delete(userId);
-		} else {
-			this.#recordFailure(userId);
-		}
+		if (ok) await this.#limiter.clear(key);
 		return ok;
 	}
 
@@ -240,8 +272,8 @@ export class MfaManager {
 	 * Whether the user is currently locked out of `verify()` after too many
 	 * failed attempts. Use it to surface a "try again later" message.
 	 */
-	isLocked(userId: string): boolean {
-		return this.#isLocked(userId);
+	isLocked(userId: string): Promise<boolean> {
+		return this.#limiter.isBlocked(lockoutKey(userId));
 	}
 
 	/** List the user's factors without exposing any secret material. */
@@ -266,28 +298,6 @@ export class MfaManager {
 		await this.#store.delete(factorId);
 	}
 
-	#isLocked(userId: string): boolean {
-		const entry = this.#attempts.get(userId);
-		if (!entry) {
-			return false;
-		}
-		if (entry.resetAt < Date.now()) {
-			this.#attempts.delete(userId);
-			return false;
-		}
-		return entry.count >= this.#maxAttempts;
-	}
-
-	#recordFailure(userId: string): void {
-		const now = Date.now();
-		let entry = this.#attempts.get(userId);
-		if (!entry || entry.resetAt < now) {
-			entry = { count: 0, resetAt: now + this.#windowMs };
-			this.#attempts.set(userId, entry);
-		}
-		entry.count++;
-	}
-
 	#requireTotp(): TotpProvider {
 		if (!this.#totp) {
 			throw new WardenError(
@@ -307,6 +317,11 @@ export class MfaManager {
 		}
 		return this.#backupCodes;
 	}
+}
+
+/** The limiter key of a user's MFA attempts. */
+function lockoutKey(userId: string): string {
+	return `mfa:${userId}`;
 }
 
 function newId(): string {
