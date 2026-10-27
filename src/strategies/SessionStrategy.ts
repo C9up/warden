@@ -7,6 +7,7 @@
  * @implements MISS-7
  */
 
+import { randomUUID } from "node:crypto";
 import type {
 	AuthClientResponse,
 	AuthResult,
@@ -20,6 +21,7 @@ import {
 	type RememberMeTokenDriver,
 	verifyAndRecycleRememberMeToken,
 } from "../RememberMeToken.js";
+import type { TokenBlacklist } from "../TokenBlacklist.js";
 
 export interface SessionStore {
 	get(key: string): unknown;
@@ -39,7 +41,22 @@ export interface SessionStore {
 	 * directly so this is wired automatically.
 	 */
 	regenerate(): void;
+	/**
+	 * The session's lifetime in seconds, which a revocation has to outlast.
+	 * Ream's `Session` carries it; another store may leave it out and set
+	 * `sessionAge` instead.
+	 */
+	readonly config?: { readonly ttl: number };
+	/**
+	 * Whether ending the session on the server ends every copy of it. Ream's
+	 * `Session` answers `false` under the cookie store; a store that leaves it
+	 * out is taken to keep its sessions on the server.
+	 */
+	readonly revocable?: boolean;
 }
+
+/** Ream's default session lifetime, two hours. */
+const DEFAULT_SESSION_AGE_SECONDS = 7200;
 
 export interface SessionStrategyConfig {
 	sessionKey?: string;
@@ -67,6 +84,28 @@ export interface SessionStrategyConfig {
 	 * rides a cross-site POST unless the app says so here.
 	 */
 	rememberMeCookie?: RememberMeCookieAttributes;
+	/**
+	 * Revoke each sign-in at logout, as `JwtStrategy`'s `blacklist` revokes a
+	 * token: every login gets an id, logout lists it until every copy of the
+	 * session has expired, and a session carrying a listed id is signed out.
+	 *
+	 * What makes a logout hold under the COOKIE session driver, where the
+	 * session lives in the browser and nothing on the server can delete it — a
+	 * copy taken before the logout, or a request that was running across it and
+	 * re-sent the signed-in cookie after, would otherwise be signed in still.
+	 * The server-side drivers do not need it: logout rotates the session id and
+	 * a request still in flight cannot write the old entry back.
+	 *
+	 * NAMED DEVIATION: upstream's session guard has no revocation; its cookie
+	 * store has both holes.
+	 */
+	blacklist?: TokenBlacklist;
+	/**
+	 * Session lifetime in SECONDS, when the session does not carry it (Ream's
+	 * does). A revocation is kept for twice this, so it outlives the cookie a
+	 * request running across the logout re-issued.
+	 */
+	sessionAge?: number;
 }
 
 /** What an app may set on the remember-me cookie. */
@@ -124,6 +163,16 @@ export class SessionStrategy implements AuthStrategy {
 			throw new WardenError(
 				"INVALID_CONFIG",
 				`rememberMeAge must be a positive whole number of seconds, got ${String(age)}`,
+			);
+		}
+		const sessionAge = config.sessionAge;
+		if (
+			sessionAge !== undefined &&
+			(!Number.isSafeInteger(sessionAge) || sessionAge <= 0)
+		) {
+			throw new WardenError(
+				"INVALID_CONFIG",
+				`sessionAge must be a positive whole number of seconds, got ${String(sessionAge)}`,
 			);
 		}
 		this.#config = config;
@@ -257,6 +306,12 @@ export class SessionStrategy implements AuthStrategy {
 		if (!userId) return { authenticated: false, error: "No session user" };
 		if (typeof userId !== "string" && typeof userId !== "number")
 			return { authenticated: false, error: "Invalid session data" };
+		if (await this.#revoked(context.session)) {
+			// Forgotten, not just refused: a cookie session re-sent as it came in
+			// would carry the revoked sign-in on, and outlive its listing.
+			this.#unseat(context.session);
+			return { authenticated: false, error: "Session revoked" };
+		}
 		const user = await this.#config.findUser(userId);
 		if (!user) return { authenticated: false, error: "User not found" };
 		// `mfa` is this SESSION's step-up, whatever `findUser` said (see
@@ -286,8 +341,22 @@ export class SessionStrategy implements AuthStrategy {
 	 * exists to report.
 	 */
 	seatSession(user: UserPayload, session: SessionStore): void {
+		if (session.revocable === false && !this.#config.blacklist) {
+			// Refused rather than signed in: on this store a logout could never
+			// hold — a copy of the cookie, or one re-sent by a request running
+			// across the logout, would stay signed in until it expired.
+			throw new WardenError(
+				"INVALID_CONFIG",
+				"This session store keeps the session in the browser and cannot revoke a sign-in. Give the session guard a `blacklist`, or use a server-side session store (database, redis).",
+				{
+					hint: "new SessionStrategy({ findUser, blacklist: new TokenBlacklist(new RedisBlacklistDriver(client)) })",
+				},
+			);
+		}
 		session.regenerate();
 		session.put(this.#sessionKey, user.id);
+		// What a logout revokes: one sign-in, not the user's every device.
+		session.put(this.#signInKey(), randomUUID());
 		// A new sign-in has not stepped up yet, whatever the session held before.
 		session.forget(this.#mfaKey());
 	}
@@ -304,6 +373,31 @@ export class SessionStrategy implements AuthStrategy {
 	/** The session key of the step-up marker, beside the user id's. */
 	#mfaKey(): string {
 		return `${this.#sessionKey}_mfa`;
+	}
+
+	/** The session key of this sign-in's id, which a logout revokes. */
+	#signInKey(): string {
+		return `${this.#sessionKey}_sid`;
+	}
+
+	/** Drop every key a sign-in wrote. */
+	#unseat(session: SessionStore): void {
+		session.forget(this.#sessionKey);
+		session.forget(this.#mfaKey());
+		session.forget(this.#signInKey());
+	}
+
+	/**
+	 * Whether the blacklist refuses this session's sign-in. A session with no
+	 * sign-in id is refused too, as `JwtStrategy` refuses a token with no `jti`:
+	 * it could never be revoked, so letting it through would keep the hole open.
+	 */
+	async #revoked(session: SessionStore): Promise<boolean> {
+		const blacklist = this.#config.blacklist;
+		if (!blacklist) return false;
+		const signIn = session.get(this.#signInKey());
+		if (typeof signIn !== "string" || signIn.length === 0) return true;
+		return blacklist.isRevoked(signIn);
 	}
 
 	async login(
@@ -330,11 +424,22 @@ export class SessionStrategy implements AuthStrategy {
 	 * the guard's own logic rather than by the test knowing where the id lives.
 	 */
 	authenticateAsClient(user: UserPayload): AuthClientResponse {
-		return { session: { [this.#sessionKey]: user.id } };
+		return {
+			session: {
+				[this.#sessionKey]: user.id,
+				[this.#signInKey()]: randomUUID(),
+			},
+		};
 	}
 
 	/**
-	 * Logout — remove the user id from the session.
+	 * Logout — remove the user id from the session, and rotate its id.
+	 *
+	 * Rotating is the named deviation (upstream only forgets the key): the old
+	 * id is what a request still running holds, and with the old entry gone it
+	 * has nothing to write its signed-in copy back to. A copy of the old id
+	 * points at nothing either. With a `blacklist`, the sign-in is also listed,
+	 * which is what holds under the cookie driver.
 	 *
 	 * The remember-me token is revoked separately through
 	 * {@link revokeRememberMeToken}, because only the caller holds the cookie.
@@ -343,8 +448,16 @@ export class SessionStrategy implements AuthStrategy {
 		session: SessionStore,
 		state?: SessionGuardState,
 	): Promise<void> {
-		session.forget(this.#sessionKey);
-		session.forget(this.#mfaKey());
+		const signIn = session.get(this.#signInKey());
+		if (this.#config.blacklist && typeof signIn === "string") {
+			const age =
+				session.config?.ttl ??
+				this.#config.sessionAge ??
+				DEFAULT_SESSION_AGE_SECONDS;
+			await this.#config.blacklist.revoke(signIn, Date.now() + age * 2000);
+		}
+		this.#unseat(session);
+		session.regenerate();
 		if (state) {
 			state.viaRemember = false;
 			state.attemptedViaRemember = false;
