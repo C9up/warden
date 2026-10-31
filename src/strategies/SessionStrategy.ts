@@ -103,7 +103,11 @@ export interface SessionStrategyConfig {
 	/**
 	 * Session lifetime in SECONDS, when the session does not carry it (Ream's
 	 * does). A revocation is kept for twice this, so it outlives the cookie a
-	 * request running across the logout re-issued.
+	 * request running across the logout re-issued: Ream's cookie store dates
+	 * that cookie from when the request read the session, so it ends within one
+	 * lifetime of the logout, however long the request ran. A store that dated
+	 * it from the response would need a listing kept as long as its slowest
+	 * request.
 	 */
 	sessionAge?: number;
 }
