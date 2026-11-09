@@ -4,7 +4,7 @@
  * @implements FR50, FR51
  */
 
-// Side-effect import: registers the `Reflect.defineMetadata` / `getOwnMetadata`
+// Side-effect import: registers the `Reflect.defineMetadata` / `getMetadata`
 // methods used below. Pulled in here (not transitively via the framework)
 // so warden remains self-sufficient when published / consumed standalone.
 import "reflect-metadata";
@@ -44,12 +44,25 @@ export function Role(...roles: string[]): MethodDecorator {
 	};
 }
 
+/*
+ * The readers below walk the prototype chain (`Reflect.getMetadata`), so an
+ * action a controller inherits keeps the guard and the authorization its parent
+ * declared: `class UsersController extends AdminController {}` routes
+ * `[UsersController, 'index']` to a method declared on `AdminController`, and
+ * reading only the subclass's own metadata made that route public.
+ *
+ * The metadata belongs to the action NAME, not to the function: an override
+ * that declares nothing inherits its parent's decorators too, so redefining a
+ * method can never drop a guard by accident. An override that declares its own
+ * decorator replaces the parent's for that decorator.
+ */
+
 /** Get guard metadata. */
 export function getGuardMetadata(
 	target: object,
 	propertyKey: string | symbol,
 ): string[] {
-	return Reflect.getOwnMetadata(GUARD_KEY, target, propertyKey) ?? [];
+	return Reflect.getMetadata(GUARD_KEY, target, propertyKey) ?? [];
 }
 
 /** Get permission metadata. */
@@ -57,7 +70,7 @@ export function getPermissionMetadata(
 	target: object,
 	propertyKey: string | symbol,
 ): string[] {
-	return Reflect.getOwnMetadata(PERMISSION_KEY, target, propertyKey) ?? [];
+	return Reflect.getMetadata(PERMISSION_KEY, target, propertyKey) ?? [];
 }
 
 /** Get role metadata. */
@@ -65,7 +78,7 @@ export function getRoleMetadata(
 	target: object,
 	propertyKey: string | symbol,
 ): string[] {
-	return Reflect.getOwnMetadata(ROLE_KEY, target, propertyKey) ?? [];
+	return Reflect.getMetadata(ROLE_KEY, target, propertyKey) ?? [];
 }
 
 /**
@@ -85,5 +98,5 @@ export function getRequireMfaMetadata(
 	target: object,
 	propertyKey: string | symbol,
 ): boolean {
-	return Reflect.getOwnMetadata(MFA_KEY, target, propertyKey) ?? false;
+	return Reflect.getMetadata(MFA_KEY, target, propertyKey) ?? false;
 }

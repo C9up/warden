@@ -1,5 +1,9 @@
 import "reflect-metadata";
 import { describe, expect, it } from "vitest";
+import {
+	AccessTokensProvider,
+	MemoryAccessTokenStore,
+} from "../../src/AccessToken.js";
 import { AuthManager, type UserPayload } from "../../src/AuthManager.js";
 import type { WardenConfig } from "../../src/config.js";
 import { MemoryRightsStore } from "../../src/rights/MemoryRightsStore.js";
@@ -209,7 +213,10 @@ describe("warden > WardenProvider", () => {
 		const { container, app } = makeFakeApp({
 			jwt: validJwtConfig,
 			apiKey: {
-				async findByKey() {
+				tokens: new AccessTokensProvider({
+					store: new MemoryAccessTokenStore(),
+				}),
+				async findUser() {
 					return null;
 				},
 			},

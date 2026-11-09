@@ -62,11 +62,26 @@ describe("warden > ResilientBlacklistDriver", () => {
 		);
 	});
 
-	it("fails open for tokens it never revoked during an outage", async () => {
+	it("fails closed for tokens it never revoked during an outage", async () => {
 		const primary = new FlakyPrimary();
-		const driver = new ResilientBlacklistDriver(primary);
+		const driver = new ResilientBlacklistDriver(
+			primary,
+			new MemoryBlacklistDriver(),
+			{ onDegrade: () => {} },
+		);
 		primary.failing = true;
-		// Unknown token while the primary is unreachable → allowed through.
+		// Another instance may have revoked it: nobody can say it was not.
+		await expect(driver.has("never-seen")).rejects.toThrow(/KeyDB down/);
+	});
+
+	it("fails open only when told to", async () => {
+		const primary = new FlakyPrimary();
+		const driver = new ResilientBlacklistDriver(
+			primary,
+			new MemoryBlacklistDriver(),
+			{ onDegrade: () => {}, failOpen: true },
+		);
+		primary.failing = true;
 		expect(await driver.has("never-seen")).toBe(false);
 	});
 

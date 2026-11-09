@@ -545,9 +545,45 @@ export class GuardAccessor {
 		if (user) user.mfa = true;
 	}
 
-	/** Log the current user out of this guard (session guards). */
-	logout(): Promise<void> {
-		return this.#auth.logout(this.#requireSession(), this.#name, this.#state);
+	/**
+	 * Log the current user out of this guard (session guards).
+	 *
+	 * Ends the remember-me credential too, as upstream's session guard does: the
+	 * cookie is cleared and the stored token behind it deleted. Leaving either
+	 * meant the next request, with an empty session, was signed straight back
+	 * in from the cookie.
+	 *
+	 * The cookie is cleared first and whatever happens next: a store that fails
+	 * to delete the row must not leave the browser holding the credential. The
+	 * store's error is still thrown, after the session is ended, because a token
+	 * row that survived a logout is something the application has to know about.
+	 *
+	 * NAMED DEVIATION — upstream deletes the row only once the presented secret
+	 * matches it and only for the signed-in user. Here the row is deleted from
+	 * the identifier the (encrypted) cookie names whatever the secret: a cookie
+	 * whose secret no longer matches is one a stolen copy already recycled, and
+	 * a logout from the real browser is exactly when that copy must die.
+	 */
+	async logout(): Promise<void> {
+		const session = this.#requireSession();
+		const strategy = strategyOrUndefined(this.#auth, this.#name);
+		const issuer =
+			strategy && isRememberMeIssuer(strategy) ? strategy : undefined;
+		const read = this.#ctx.request.encryptedCookie;
+		const cookie =
+			issuer && read
+				? read.call(this.#ctx.request, issuer.rememberMeCookieName)
+				: null;
+		this.#clearRememberMe();
+		let revocation: Promise<void> = Promise.resolve();
+		if (issuer && cookie) {
+			revocation = issuer.revokeRememberMeToken(cookie);
+			// Observed here so a failing store is not an unhandled rejection
+			// while the session is being ended; it is rethrown below.
+			revocation.catch(() => undefined);
+		}
+		await this.#auth.logout(session, this.#name, this.#state);
+		await revocation;
 	}
 
 	#requireSession(): SessionStore {

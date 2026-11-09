@@ -157,10 +157,26 @@ export class MfaManager {
 		return { factorId: factor.id, secret, uri };
 	}
 
-	/** Confirm a pending TOTP factor by verifying a first code. */
-	async confirmTotp(factorId: string, code: string): Promise<boolean> {
+	/**
+	 * Confirm a pending TOTP factor of `userId` by verifying a first code.
+	 *
+	 * Takes the owner beside the factor id and refuses a factor that belongs
+	 * to someone else: a factor id is something an application passes through
+	 * a request, and one leaked through a log or a support tool must not let
+	 * another account act on it. The attempt counts against the same lockout
+	 * as {@link verify}, so the first code cannot be guessed without limit.
+	 */
+	async confirmTotp(
+		userId: string,
+		factorId: string,
+		code: string,
+	): Promise<boolean> {
 		const totp = this.#requireTotp();
-		const factor = await this.#store.findById(factorId);
+		const key = lockoutKey(userId);
+		if (!(await this.#limiter.attempt(key)).allowed) {
+			return false;
+		}
+		const factor = await this.#ownedFactor(userId, factorId);
 		if (factor?.kind !== "totp" || !factor.secret) {
 			return false;
 		}
@@ -168,6 +184,7 @@ export class MfaManager {
 			return false;
 		}
 		await this.#store.save({ ...factor, confirmedAt: Date.now() });
+		await this.#limiter.clear(key);
 		return true;
 	}
 
@@ -293,9 +310,25 @@ export class MfaManager {
 		return factors.some((f) => f.confirmedAt !== undefined);
 	}
 
-	/** Remove a factor (e.g. the user disables their authenticator). */
-	async disableFactor(factorId: string): Promise<void> {
-		await this.#store.delete(factorId);
+	/**
+	 * Remove one of `userId`'s factors (e.g. the user disables their
+	 * authenticator). Answers whether a factor was removed: `false` for an
+	 * unknown id or one owned by another user, which is left in place.
+	 */
+	async disableFactor(userId: string, factorId: string): Promise<boolean> {
+		const factor = await this.#ownedFactor(userId, factorId);
+		if (factor === null) return false;
+		await this.#store.delete(factor.id);
+		return true;
+	}
+
+	/** The factor, only when it belongs to `userId`. */
+	async #ownedFactor(
+		userId: string,
+		factorId: string,
+	): Promise<MfaFactor | null> {
+		const factor = await this.#store.findById(factorId);
+		return factor !== null && factor.userId === userId ? factor : null;
 	}
 
 	#requireTotp(): TotpProvider {

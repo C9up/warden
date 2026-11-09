@@ -7,6 +7,22 @@
 import "./augmentations.js";
 
 export type {
+	AccessTokenAttributes,
+	AccessTokenStore,
+	AccessTokensProviderContract,
+	AccessTokensProviderOptions,
+	CreateAccessTokenOptions,
+	StoredAccessToken,
+	TokenOwner,
+} from "./AccessToken.js";
+export {
+	AccessToken,
+	AccessTokensProvider,
+	crc32,
+	MemoryAccessTokenStore,
+} from "./AccessToken.js";
+
+export type {
 	AttemptCount,
 	AttemptRedisClient,
 	AttemptRedisSource,
@@ -24,11 +40,13 @@ export type {
 	AuthConfig,
 	AuthResult,
 	AuthStrategy,
+	CurrentAccessToken,
 	UserPayload,
 } from "./AuthManager.js";
 export {
 	AuthManager,
 	authEventPrefix,
+	tokenAllows,
 	type WardenEmitter,
 } from "./AuthManager.js";
 export type {

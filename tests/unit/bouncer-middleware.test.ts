@@ -190,3 +190,61 @@ describe("warden > initializeBouncer", () => {
 		expect(ctx.bouncer).toBeUndefined();
 	});
 });
+
+describe("warden > initializeBouncer reads the user when a check runs", () => {
+	/** A request whose handler authenticates itself with a bearer token. */
+	function inlineRoute() {
+		const manager = new AuthManager({
+			default: "jwt",
+			guards: {
+				jwt: {
+					name: "jwt",
+					async authenticate() {
+						return { authenticated: false };
+					},
+					async verify(token) {
+						return token === "good"
+							? { authenticated: true, user: { id: "u1" } }
+							: { authenticated: false };
+					},
+				} satisfies AuthStrategy,
+			},
+		});
+		const bindings = new Map<unknown, unknown>([
+			["bouncer:registry", registry],
+			[AuthManager, manager],
+		]);
+		const ctx: WardenContext = {
+			request: { headers: () => ({ authorization: "Bearer good" }) },
+			response: { status() {}, json() {} },
+			containerResolver: {
+				async make(token) {
+					if (bindings.has(token)) return bindings.get(token);
+					throw new Error(`No binding for ${String(token)}`);
+				},
+			},
+		};
+		// No silent auth: the request reaches the bouncer as a guest.
+		ctx.auth = new Authenticator(ctx, manager);
+		return ctx;
+	}
+
+	it("authorizes the user a handler authenticated after the middleware ran", async () => {
+		const ctx = inlineRoute();
+		await initializeBouncer(ctx, async () => {
+			await ctx.auth?.authenticate?.();
+			await expect(
+				ctx.bouncer?.authorize("post.edit", { ownerId: "u1" }),
+			).resolves.toBeUndefined();
+		});
+	});
+
+	it("still denies a guest who never authenticated", async () => {
+		const ctx = inlineRoute();
+		await initializeBouncer(ctx, async () => {
+			expect(await ctx.bouncer?.allows("post.edit", { ownerId: "u1" })).toBe(
+				false,
+			);
+		});
+	});
+});

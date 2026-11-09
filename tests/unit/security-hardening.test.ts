@@ -298,7 +298,7 @@ describe("warden > the MFA lockout holds against a burst (040)", () => {
 			id: "u1",
 			name: "u1",
 		});
-		await manager.confirmTotp(factorId, totp.generate(secret));
+		await manager.confirmTotp("u1", factorId, totp.generate(secret));
 		verify.mockClear();
 		await Promise.all(
 			Array.from({ length: 20 }, () => manager.verify("u1", "000000")),

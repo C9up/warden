@@ -101,10 +101,67 @@ describe("warden > AuthRateLimiter", () => {
 });
 
 describe("warden > MemoryAttemptStore", () => {
-	it("stays within its bound, evicting the oldest live windows", async () => {
+	it("stays within its bound by refusing a new key, never evicting a live one", async () => {
 		const store = new MemoryAttemptStore({ maxKeys: 3 });
-		for (const key of ["a", "b", "c", "d"]) await store.increment(key, 60);
-		expect(await store.count("a")).toBe(0);
-		expect(await store.count("d")).toBe(1);
+		for (const key of ["a", "b", "c"]) await store.increment(key, 60);
+
+		const refused = await store.increment("d", 60);
+
+		expect(refused.count).toBe(Number.POSITIVE_INFINITY);
+		expect(refused.resetSeconds).toBeGreaterThan(0);
+		expect(refused.resetSeconds).toBeLessThanOrEqual(60);
+		// Every live counter is still there; the refused key was not stored.
+		expect(await store.count("a")).toBe(1);
+		expect(await store.count("d")).toBe(0);
+	});
+
+	it("makes room once a window has expired", async () => {
+		vi.useFakeTimers();
+		try {
+			const store = new MemoryAttemptStore({ maxKeys: 2 });
+			await store.increment("short", 1);
+			await store.increment("long", 600);
+			vi.advanceTimersByTime(2_000);
+
+			expect((await store.increment("new", 60)).count).toBe(1);
+			expect(await store.count("long")).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not let a flood of identifiers lift a victim's lockout", async () => {
+		const limiter = new AuthRateLimiter({
+			maxAttempts: 3,
+			windowSeconds: 900,
+			store: new MemoryAttemptStore({ maxKeys: 10 }),
+		});
+		const victim = AuthRateLimiter.loginKeys("10.0.0.1", "victim@example.com");
+		for (let i = 0; i < 3; i++) await limiter.attempt(...victim);
+		expect((await limiter.attempt(...victim)).allowed).toBe(false);
+
+		// The attacker sprays made-up identifiers from many addresses.
+		for (let i = 0; i < 20; i++) {
+			await limiter.attempt(
+				...AuthRateLimiter.loginKeys(`10.1.0.${i}`, `junk-${i}@example.com`),
+			);
+		}
+
+		expect((await limiter.attempt(...victim)).allowed).toBe(false);
+		expect(await limiter.isBlocked(...victim)).toBe(true);
+	});
+
+	it("refuses an attempt it could not count", async () => {
+		const limiter = new AuthRateLimiter({
+			maxAttempts: 5,
+			store: new MemoryAttemptStore({ maxKeys: 1 }),
+		});
+		await limiter.attempt("ip:1.1.1.1");
+
+		const decision = await limiter.attempt("ip:2.2.2.2");
+
+		expect(decision.allowed).toBe(false);
+		expect(decision.remaining).toBe(0);
+		expect(decision.retryAfterSeconds).toBeGreaterThan(0);
 	});
 });

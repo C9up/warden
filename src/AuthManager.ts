@@ -16,10 +16,43 @@ import type {
 	SessionStore,
 } from "./strategies/SessionStrategy.js";
 
+/**
+ * The token a request authenticated with, when it authenticated with one: an
+ * access token, or an OAuth token from a guard such as visa's. Its abilities
+ * are what the TOKEN may do, a separate axis from `UserPayload.permissions`
+ * (what the USER may do): a request may act only where both agree.
+ */
+export interface CurrentAccessToken {
+	readonly abilities: readonly string[];
+	/** Whether the token may do `ability` (`*` grants every ability). */
+	allows(ability: string): boolean;
+	denies(ability: string): boolean;
+	/** Throw unless the token may do `ability`. */
+	authorize(ability: string): void;
+}
+
+/**
+ * Whether the token the user authenticated with, if any, allows `permission`.
+ *
+ * A permission check on a request made with a token is an INTERSECTION: the
+ * user must hold the permission AND the token must allow it. The token never
+ * widens what the user may do (a same-named ability grants nothing the user
+ * lacks), and it narrows it: a token limited to a few abilities does not carry
+ * every permission of its user. A user with no `currentAccessToken` (a session,
+ * a JWT) is not restricted here.
+ */
+export function tokenAllows(user: UserPayload, permission: string): boolean {
+	const token = user.currentAccessToken;
+	return token === undefined || token.allows(permission);
+}
+
 export interface UserPayload {
 	id: string;
 	roles?: string[];
+	/** The user's own permissions. Never widened by a token's abilities. */
 	permissions?: string[];
+	/** Set by a token guard: the token this request authenticated with. */
+	currentAccessToken?: CurrentAccessToken;
 	[key: string]: unknown;
 }
 
@@ -335,25 +368,30 @@ export class AuthManager {
 	/**
 	 * Check if a user has a specific permission within a scope (default
 	 * `"global"`). Derived from roles + store grants ONLY — token
-	 * `user.permissions` is NOT read (D1, cerebrum 459).
+	 * `user.permissions` is NOT read (D1, cerebrum 459). When the user came in
+	 * with a token (`currentAccessToken`), the token must allow it too: see
+	 * {@link tokenAllows}.
 	 */
 	async hasPermission(
 		user: UserPayload,
 		permission: string,
 		scope: Scope = "global",
 	): Promise<boolean> {
+		if (!tokenAllows(user, permission)) return false;
 		return (await this.resolvePermissions(user, scope)).has(permission);
 	}
 
 	/**
 	 * Check if a user has ALL required permissions within a scope (default
-	 * `"global"`). Empty list ⇒ vacuously true.
+	 * `"global"`). Empty list ⇒ vacuously true. Intersected with the token's
+	 * abilities like {@link hasPermission}.
 	 */
 	async hasAllPermissions(
 		user: UserPayload,
 		permissions: string[],
 		scope: Scope = "global",
 	): Promise<boolean> {
+		if (!permissions.every((p) => tokenAllows(user, p))) return false;
 		return (await this.resolvePermissions(user, scope)).hasAll(permissions);
 	}
 

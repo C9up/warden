@@ -3,7 +3,7 @@
  * `RedisBlacklistDriver`) with an in-memory fallback so a cache outage never
  * takes the whole app down.
  *
- * Policy (fail-open on reads):
+ * Policy (fail-closed on reads, unless `failOpen`):
  *   - `add()`  — records the revocation in BOTH, always. The fallback is this
  *                instance's own record of what it has revoked, not a log of its
  *                outages: writing only on failure meant a token revoked while
@@ -12,11 +12,23 @@
  *                through. A primary failure still does not fail the logout.
  *   - `has()`  — asks the fallback FIRST: what this instance revoked is known
  *                locally and needs no round trip. Otherwise it asks the
- *                primary, and if that throws, allows the token through
- *                (fail-open). Access tokens are short-lived, so the window a
- *                revocation missed by BOTH survives is bounded by the token TTL
- *                — the blacklist is defense-in-depth above expiry, not the
- *                primary boundary.
+ *                primary, and if that throws, rethrows: the guard asking treats
+ *                it as a crashed strategy (a 500, or a guest under silent auth),
+ *                never as "not revoked".
+ *
+ *                Answering "not revoked" (fail-open) assumed every consumer was
+ *                a short-lived access token. The same blacklist backs a session
+ *                guard's logout under the cookie store, listed for twice the
+ *                session lifetime, and JWTs issued for days: during an outage
+ *                every sign-in revoked by ANOTHER instance, or before this
+ *                process started, was accepted again. Answering "revoked"
+ *                instead would not do either: a session guard forgets a revoked
+ *                sign-in, so an outage would log every user out for good.
+ *
+ *                `failOpen: true` restores the old answer for a deployment whose
+ *                only consumer is a JWT guard with a short `expiresIn`, where
+ *                availability through an outage is worth more than a revocation
+ *                missed for at most one token lifetime.
  *
  * Every degradation invokes `onDegrade`. The default reports the first failure
  * per operation and then a periodic count: an outage that logs on every request
@@ -36,6 +48,11 @@ export interface BlacklistDegradeEvent {
 export interface ResilientBlacklistConfig {
 	/** Invoked whenever the primary driver fails and the fallback is used. */
 	onDegrade?: (event: BlacklistDegradeEvent) => void;
+	/**
+	 * Let a credential through when the primary cannot answer and this instance
+	 * never revoked it. Off by default: see the policy above for what it costs.
+	 */
+	failOpen?: boolean;
 }
 
 /** How long a repeat of the same failing operation stays folded into a count. */
@@ -74,6 +91,7 @@ export class ResilientBlacklistDriver implements BlacklistDriver {
 	readonly #primary: BlacklistDriver;
 	readonly #fallback: BlacklistDriver;
 	readonly #onDegrade: (event: BlacklistDegradeEvent) => void;
+	readonly #failOpen: boolean;
 
 	constructor(
 		primary: BlacklistDriver,
@@ -83,6 +101,7 @@ export class ResilientBlacklistDriver implements BlacklistDriver {
 		this.#primary = primary;
 		this.#fallback = fallback;
 		this.#onDegrade = config.onDegrade ?? makeDefaultOnDegrade();
+		this.#failOpen = config.failOpen === true;
 	}
 
 	async add(jti: string, expiresAt: number): Promise<void> {
@@ -108,8 +127,9 @@ export class ResilientBlacklistDriver implements BlacklistDriver {
 			return await this.#primary.has(jti);
 		} catch (error) {
 			this.#onDegrade({ op: "has", error });
-			// Fail-open on what neither knows: access tokens are short-lived.
-			return false;
+			// Neither store can say the credential was not revoked.
+			if (this.#failOpen) return false;
+			throw error;
 		}
 	}
 

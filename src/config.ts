@@ -86,7 +86,10 @@ export function sessionGuard(config: SessionStrategyConfig): GuardFactory {
 	return new SessionStrategy(config);
 }
 
-/** Build an API-key / access-tokens guard from its config. */
+/**
+ * Build an access-tokens guard from its config (AdonisJS `tokensGuard()`
+ * shape): `apiKeyGuard({ tokens: new AccessTokensProvider({ store }), findUser })`.
+ */
 export function apiKeyGuard(config: ApiKeyConfig): GuardFactory {
 	return new ApiKeyStrategy(config);
 }
@@ -126,9 +129,10 @@ export interface WardenConfig {
 	 */
 	session?: SessionStrategyConfig;
 	/**
-	 * API-key strategy configuration. Supply `findByKey` so `@Guard('api-key')`
-	 * routes resolve the user (and scopes) from the request header. Without this,
-	 * the `api-key` strategy is unregistered and `@Guard('api-key')` throws.
+	 * Access-tokens strategy configuration: a `tokens` provider (hashed,
+	 * prefixed, expiring tokens with abilities) and `findUser`. Registered as
+	 * `access_tokens` and `api-key`; without it, `@Guard('access_tokens')`
+	 * throws.
 	 */
 	apiKey?: ApiKeyConfig;
 	/**

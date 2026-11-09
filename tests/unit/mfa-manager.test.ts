@@ -49,7 +49,9 @@ describe("warden > MfaManager — TOTP", () => {
 		expect(await m.verifyTotp(USER.id, totp.generate(secret))).toBe(false);
 
 		vi.useFakeTimers({ shouldAdvanceTime: true });
-		expect(await m.confirmTotp(factorId, totp.generate(secret))).toBe(true);
+		expect(await m.confirmTotp(USER.id, factorId, totp.generate(secret))).toBe(
+			true,
+		);
 		expect(await m.isEnabled(USER.id)).toBe(true);
 		nextTimeStep();
 		expect(await m.verifyTotp(USER.id, totp.generate(secret))).toBe(true);
@@ -60,7 +62,7 @@ describe("warden > MfaManager — TOTP", () => {
 		const totp = new TotpProvider();
 		const { factorId, secret } = await m.enrollTotp(USER, "iPhone");
 		const code = totp.generate(secret);
-		expect(await m.confirmTotp(factorId, code)).toBe(true);
+		expect(await m.confirmTotp(USER.id, factorId, code)).toBe(true);
 		// Same code, still inside its window — a replay, and refused.
 		expect(await m.verifyTotp(USER.id, code)).toBe(false);
 	});
@@ -68,7 +70,7 @@ describe("warden > MfaManager — TOTP", () => {
 	it("does not confirm with a wrong code", async () => {
 		const m = manager();
 		const { factorId } = await m.enrollTotp(USER);
-		expect(await m.confirmTotp(factorId, "000000")).toBe(false);
+		expect(await m.confirmTotp(USER.id, factorId, "000000")).toBe(false);
 		expect(await m.isEnabled(USER.id)).toBe(false);
 	});
 });
@@ -99,7 +101,7 @@ describe("warden > MfaManager — unified verify & status", () => {
 		const totp = new TotpProvider();
 		const { factorId, secret } = await m.enrollTotp(USER);
 		vi.useFakeTimers({ shouldAdvanceTime: true });
-		await m.confirmTotp(factorId, totp.generate(secret));
+		await m.confirmTotp(USER.id, factorId, totp.generate(secret));
 		const codes = await m.createBackupCodes(USER.id);
 
 		nextTimeStep();
@@ -120,7 +122,7 @@ describe("warden > MfaManager — unified verify & status", () => {
 		});
 		expect(Object.keys(factor)).not.toContain("secret");
 
-		await m.disableFactor(factorId);
+		expect(await m.disableFactor(USER.id, factorId)).toBe(true);
 		expect(await m.listFactors(USER.id)).toHaveLength(0);
 	});
 
@@ -130,6 +132,74 @@ describe("warden > MfaManager — unified verify & status", () => {
 		await expect(m.createBackupCodes(USER.id)).rejects.toThrow(
 			/no BackupCodesProvider/,
 		);
+	});
+});
+
+describe("warden > MfaManager — a factor answers only to its owner", () => {
+	const OTHER = { id: "user-2", name: "other@c9up.com" };
+
+	it("does not let another user disable a factor", async () => {
+		const m = manager();
+		const { factorId } = await m.enrollTotp(USER);
+
+		expect(await m.disableFactor(OTHER.id, factorId)).toBe(false);
+		expect(await m.listFactors(USER.id)).toHaveLength(1);
+	});
+
+	it("answers false for an unknown factor", async () => {
+		expect(await manager().disableFactor(USER.id, "no-such-factor")).toBe(
+			false,
+		);
+	});
+
+	it("does not let another user confirm a factor, even with a valid code", async () => {
+		const m = manager();
+		const totp = new TotpProvider();
+		const { factorId, secret } = await m.enrollTotp(USER);
+
+		expect(await m.confirmTotp(OTHER.id, factorId, totp.generate(secret))).toBe(
+			false,
+		);
+		expect(await m.isEnabled(USER.id)).toBe(false);
+	});
+
+	it("counts confirmation attempts against the lockout", async () => {
+		const totp = new TotpProvider();
+		const verify = vi.spyOn(totp, "verify");
+		const m = new MfaManager({
+			issuer: "Fluveo",
+			totp,
+			rateLimit: { maxAttempts: 3 },
+		});
+		const { factorId, secret } = await m.enrollTotp(USER);
+		for (const code of ["000000", "000001", "000002"]) {
+			expect(await m.confirmTotp(USER.id, factorId, code)).toBe(false);
+		}
+		verify.mockClear();
+
+		// Locked: even the right code no longer reaches the provider.
+		expect(await m.confirmTotp(USER.id, factorId, totp.generate(secret))).toBe(
+			false,
+		);
+		expect(verify).not.toHaveBeenCalled();
+		expect(await m.isLocked(USER.id)).toBe(true);
+	});
+
+	it("clears the count once a factor is confirmed", async () => {
+		const m = new MfaManager({
+			issuer: "Fluveo",
+			totp: new TotpProvider(),
+			rateLimit: { maxAttempts: 3 },
+		});
+		const totp = new TotpProvider();
+		const { factorId, secret } = await m.enrollTotp(USER);
+		await m.confirmTotp(USER.id, factorId, "000000");
+		await m.confirmTotp(USER.id, factorId, "000001");
+
+		expect(await m.confirmTotp(USER.id, factorId, totp.generate(secret))).toBe(
+			true,
+		);
+		expect(await m.isLocked(USER.id)).toBe(false);
 	});
 });
 
@@ -143,7 +213,7 @@ describe("warden > MfaManager — rate limit", () => {
 		const totp = new TotpProvider();
 		const { factorId, secret } = await m.enrollTotp(USER);
 		vi.useFakeTimers({ shouldAdvanceTime: true });
-		await m.confirmTotp(factorId, totp.generate(secret));
+		await m.confirmTotp(USER.id, factorId, totp.generate(secret));
 		// The confirmation code is spent; the tests below log in with a later one.
 		nextTimeStep();
 		return { m, totp, secret };

@@ -1,6 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+	AccessTokensProvider,
+	MemoryAccessTokenStore,
+} from "../../src/AccessToken.js";
 import type { UserPayload } from "../../src/AuthManager.js";
-import { createWarden, type Warden } from "../../src/standalone.js";
+import { jwtGuard, sessionGuard } from "../../src/config.js";
+import {
+	createWarden,
+	type StandaloneRequest,
+	type Warden,
+} from "../../src/standalone.js";
 
 const SECRET = "x".repeat(32);
 
@@ -53,11 +62,11 @@ function makeRes(): {
 
 function runExpress(
 	warden: Warden,
-	req: Record<string, unknown>,
+	req: StandaloneRequest,
 ): Promise<{
 	captured: ExpressCaptured;
 	nextCalled: boolean;
-	req: Record<string, unknown>;
+	req: StandaloneRequest;
 }> {
 	const mw = warden.expressMiddleware();
 	const { res, captured } = makeRes();
@@ -124,17 +133,21 @@ describe("warden > createWarden", () => {
 	it("wires the api-key strategy from config.apiKey (jwt-less config doesn't throw)", async () => {
 		// Before the fix only config.jwt was wired, so this jwt-less config threw
 		// AuthManager INVALID_CONFIG at construction (audit 2026-06-13).
+		const tokens = new AccessTokensProvider({
+			store: new MemoryAccessTokenStore(),
+		});
 		const warden = createWarden({
 			defaultStrategy: "api-key",
 			apiKey: {
-				async findByKey(key: string) {
-					return key === "secret-key"
-						? { user: { id: "u1" }, scopes: ["orders.read"] }
-						: null;
+				tokens,
+				async findUser(id) {
+					return id === "u1" ? { id: "u1" } : null;
 				},
 			},
 		});
-		const ok = await warden.verify("secret-key", "api-key");
+		const minted = await tokens.create({ id: "u1" }, ["orders.read"]);
+		const value = minted.value?.release() ?? "";
+		const ok = await warden.verify(value, "api-key");
 		expect(ok.authenticated).toBe(true);
 		expect(ok.user?.id).toBe("u1");
 		const bad = await warden.verify("wrong", "api-key");
@@ -215,5 +228,94 @@ describe("warden > expressMiddleware", () => {
 			error: { code: "E_WARDEN_UNAUTHORIZED" },
 		});
 		expect(out.nextCalled).toBe(false);
+	});
+});
+
+describe("warden > expressMiddleware — a crashed guard is a server error", () => {
+	function crashingWarden(): Warden {
+		return createWarden({
+			defaultStrategy: "jwt",
+			jwt: {
+				secret: SECRET,
+				async findUser() {
+					throw new Error("connect ECONNREFUSED 10.0.0.5:5432");
+				},
+				async verifyCredentials() {
+					return null;
+				},
+			},
+		});
+	}
+
+	it("answers 500 with a generic message, never the thrown one", async () => {
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const token = await buildWarden().generateToken(SAMPLE_USER);
+			const out = await runExpress(crashingWarden(), {
+				headers: { authorization: `Bearer ${token}` },
+			});
+
+			expect(out.captured.status).toBe(500);
+			expect(out.captured.body).toEqual({
+				error: {
+					code: "E_WARDEN_AUTH_STRATEGY_ERROR",
+					message: "Authentication unavailable. Check server logs.",
+				},
+			});
+			expect(JSON.stringify(out.captured.body)).not.toContain("ECONNREFUSED");
+			expect(out.nextCalled).toBe(false);
+			// The cause still reaches the operator.
+			expect(String(error.mock.calls[0]?.[0])).toContain("ECONNREFUSED");
+		} finally {
+			error.mockRestore();
+		}
+	});
+});
+
+describe("warden > generateToken picks the configured guard", () => {
+	const jwtConfig = {
+		secret: SECRET,
+		async findUser(id: string) {
+			return id === SAMPLE_USER.id ? SAMPLE_USER : null;
+		},
+		async verifyCredentials() {
+			return null;
+		},
+	};
+
+	it("mints through the default guard, whatever it is called", async () => {
+		const warden = createWarden({
+			default: "api",
+			guards: { api: jwtGuard(jwtConfig) },
+		});
+
+		const token = await warden.generateToken(SAMPLE_USER);
+
+		expect((await warden.verify(token)).user?.id).toBe(SAMPLE_USER.id);
+	});
+
+	it("mints through a named guard", async () => {
+		const warden = createWarden({
+			default: "web",
+			guards: {
+				web: sessionGuard({ findUser: async () => null }),
+				api: jwtGuard(jwtConfig),
+			},
+		});
+
+		const token = await warden.generateToken(SAMPLE_USER, "api");
+
+		expect((await warden.verify(token, "api")).authenticated).toBe(true);
+	});
+
+	it("says so when the guard mints no tokens", async () => {
+		const warden = createWarden({
+			default: "web",
+			guards: { web: sessionGuard({ findUser: async () => null }) },
+		});
+
+		await expect(warden.generateToken(SAMPLE_USER)).rejects.toThrow(
+			/cannot issue tokens/,
+		);
 	});
 });

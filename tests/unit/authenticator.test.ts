@@ -356,7 +356,13 @@ describe("warden > access_tokens guard rename (#11)", () => {
 		const { ApiKeyStrategy } = await import(
 			"../../src/strategies/ApiKeyStrategy.js"
 		);
-		const strat = new ApiKeyStrategy({ findByKey: async () => null });
+		const { AccessTokensProvider, MemoryAccessTokenStore } = await import(
+			"../../src/AccessToken.js"
+		);
+		const strat = new ApiKeyStrategy({
+			tokens: new AccessTokensProvider({ store: new MemoryAccessTokenStore() }),
+			findUser: async () => null,
+		});
 		expect(strat.name).toBe("access_tokens");
 	});
 });

@@ -13,7 +13,10 @@
 
 /** A window of attempts counted under one key. */
 export interface AttemptCount {
-	/** Attempts in the current window, this one included. */
+	/**
+	 * Attempts in the current window, this one included. `Infinity` when the
+	 * store could not count the attempt at all, which refuses it.
+	 */
 	count: number;
 	/** Seconds until the window ends and the count starts over. */
 	resetSeconds: number;
@@ -34,7 +37,18 @@ export interface AttemptStore {
 /** Most keys the memory store holds before it makes room. */
 const DEFAULT_MAX_KEYS = 100_000;
 
-/** In this process's memory, bounded. Not shared across instances. */
+/**
+ * In this process's memory, bounded. Not shared across instances.
+ *
+ * When the bound is reached and every window is still live, a NEW key is
+ * refused — its attempt reported as over any limit — rather than a live window
+ * evicted to make room. Evicting forgave the oldest counters, and the keys are
+ * attacker-chosen (`id:<identifier>`): a flood of made-up identifiers erased a
+ * victim's lockout, and the attacker's own, and the guessing resumed. Refusing
+ * keeps every lockout in place; what it costs during such a flood is that
+ * first attempts under new keys wait until windows expire. A deployment that
+ * cannot accept that uses {@link RedisAttemptStore}, which has no such bound.
+ */
 export class MemoryAttemptStore implements AttemptStore {
 	readonly #entries = new Map<string, { count: number; resetAt: number }>();
 	readonly #maxKeys: number;
@@ -48,7 +62,10 @@ export class MemoryAttemptStore implements AttemptStore {
 		let entry = this.#entries.get(key);
 		if (entry === undefined || entry.resetAt <= now) {
 			this.#entries.delete(key);
-			this.#makeRoom(now);
+			const wait = this.#makeRoom(now);
+			if (wait !== undefined) {
+				return { count: Number.POSITIVE_INFINITY, resetSeconds: wait };
+			}
 			entry = { count: 0, resetAt: now + windowSeconds * 1000 };
 			this.#entries.set(key, entry);
 		}
@@ -74,20 +91,19 @@ export class MemoryAttemptStore implements AttemptStore {
 	}
 
 	/**
-	 * Keep the map under its bound: drop the expired windows, and if every
-	 * window is still live, the oldest ones — a Map iterates in insertion
-	 * order. Evicting a live window forgives its attempts; growing without
-	 * bound would take the process down instead.
+	 * Make room for one more key by dropping the expired windows. A live window
+	 * is never dropped: that would forgive its attempts. Returns `undefined`
+	 * when there is room, else the seconds until the earliest live window ends.
 	 */
-	#makeRoom(now: number): void {
-		if (this.#entries.size < this.#maxKeys) return;
+	#makeRoom(now: number): number | undefined {
+		if (this.#entries.size < this.#maxKeys) return undefined;
+		let earliest = Number.POSITIVE_INFINITY;
 		for (const [key, entry] of this.#entries) {
 			if (entry.resetAt <= now) this.#entries.delete(key);
+			else earliest = Math.min(earliest, entry.resetAt);
 		}
-		for (const key of this.#entries.keys()) {
-			if (this.#entries.size < this.#maxKeys) break;
-			this.#entries.delete(key);
-		}
+		if (this.#entries.size < this.#maxKeys) return undefined;
+		return Math.max(1, Math.ceil((earliest - now) / 1000));
 	}
 }
 

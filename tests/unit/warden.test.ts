@@ -1,5 +1,9 @@
 import "reflect-metadata";
 import { describe, expect, it } from "vitest";
+import {
+	AccessTokensProvider,
+	MemoryAccessTokenStore,
+} from "../../src/AccessToken.js";
 import type { AuthStrategy, JwtClaims, UserPayload } from "../../src/index.js";
 import {
 	ApiKeyStrategy,
@@ -463,19 +467,25 @@ describe("warden > security hardening", () => {
 		expect(j1).not.toBe(j2);
 	});
 
-	it("ApiKeyStrategy does not mutate source user and deduplicates permissions", async () => {
+	it("ApiKeyStrategy does not mutate the source user nor widen its permissions", async () => {
 		const sourceUser = { id: "u1", permissions: ["users.read"] };
-		const apiKey = new ApiKeyStrategy({
-			findByKey: async () => ({
-				user: sourceUser,
-				scopes: ["users.read", "users.write"],
-			}),
+		const tokens = new AccessTokensProvider({
+			store: new MemoryAccessTokenStore(),
 		});
+		const apiKey = new ApiKeyStrategy({
+			tokens,
+			findUser: async () => sourceUser,
+		});
+		const minted = await tokens.create(sourceUser, [
+			"users.read",
+			"users.write",
+		]);
 
-		const result = await apiKey.verify("k");
+		const result = await apiKey.verify(defined(minted.value).release());
 		expect(result.authenticated).toBe(true);
-		expect(result.user?.permissions).toEqual(["users.read", "users.write"]);
-		expect(sourceUser.permissions).toEqual(["users.read"]);
+		expect(result.user?.permissions).toEqual(["users.read"]);
+		expect(result.user?.currentAccessToken?.allows("users.write")).toBe(true);
+		expect(sourceUser).toEqual({ id: "u1", permissions: ["users.read"] });
 	});
 
 	it("AuthRateLimiter normalizes identifier case/spacing", async () => {

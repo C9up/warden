@@ -17,7 +17,7 @@
  */
 
 import { Authenticator } from "./Authenticator.js";
-import { AuthManager, type UserPayload } from "./AuthManager.js";
+import { AuthManager, tokenAllows, type UserPayload } from "./AuthManager.js";
 import type { BasePolicy } from "./bouncer/BasePolicy.js";
 import { Bouncer } from "./bouncer/Bouncer.js";
 import type { Ability, PolicyContainerResolver } from "./bouncer/types.js";
@@ -245,10 +245,21 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 	// (fail-open) — the exact bug this precedence prevents.
 	const controller = ctx.route?.controller ?? ctx.controller;
 	const action = ctx.route?.action ?? ctx.action;
-	const strategies =
+	const declared =
 		controller && action ? getGuardMetadata(controller, action) : [];
+	// `@Role`, `@Permission` and `@RequireMfa` say who may run the action, which
+	// presupposes knowing who is asking: without `@Guard` beside them they imply
+	// the default guard. Reading them only under `@Guard` left a route declaring
+	// `@Role('admin')` alone open to anonymous requests.
+	const strategies =
+		declared.length === 0 &&
+		controller &&
+		action &&
+		requiresAuthorization(controller, action)
+			? [auth.defaultStrategyName]
+			: declared;
 
-	// No guard on this route — pass through (public endpoint).
+	// No guard and no authorization decorator — pass through (public endpoint).
 	if (strategies.length === 0) {
 		await next();
 		return;
@@ -319,6 +330,18 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 
 	// Auth successful — `ctx.auth` (the Authenticator) already carries the user.
 	await next();
+}
+
+/** Whether the action carries any decorator that restricts who may run it. */
+function requiresAuthorization(
+	controller: object,
+	action: string | symbol,
+): boolean {
+	return (
+		getRoleMetadata(controller, action).length > 0 ||
+		getPermissionMetadata(controller, action).length > 0 ||
+		getRequireMfaMetadata(controller, action)
+	);
 }
 
 /**
@@ -472,11 +495,15 @@ export async function initializeBouncer(ctx: WardenContext, next: WardenNext) {
 	const candidate = await tryResolve(ctx, "bouncer:registry");
 	const registry = isBouncerRegistry(candidate) ? candidate : undefined;
 
-	const user = ctx.auth?.user ?? null;
 	const scope: Scope = registry?.resolveScope
 		? await registry.resolveScope(toScopeContext(ctx))
 		: "global";
 
+	// The user is read when the first check runs, not now: a handler that
+	// authenticates itself (`await ctx.auth.authenticate()`) and then
+	// authorizes must be judged as the user it just signed in, not as the
+	// guest this middleware saw.
+	const user = (): UserPayload | null => ctx.auth?.user ?? null;
 	const bouncer = new Bouncer(user, registry?.abilities, registry?.policies, {
 		scope,
 		resolver,
@@ -545,7 +572,11 @@ async function checkAuthorization(
 	}
 	const effective = await auth.resolvePermissions(user, scope);
 	if (requiredPermissions.length > 0) {
-		const missing = requiredPermissions.filter((p) => !effective.has(p));
+		// The user must hold it, and the token the request came in with, if
+		// any, must allow it: an intersection, never a union.
+		const missing = requiredPermissions.filter(
+			(p) => !effective.has(p) || !tokenAllows(user, p),
+		);
 		if (missing.length > 0) return `Missing permissions: ${missing.join(", ")}`;
 	}
 	if (requiredRoles.length > 0) {
