@@ -11,7 +11,7 @@ import type {
 	UserPayload,
 } from "../AuthManager.js";
 import { resolveExpiresInSeconds, type TokenDuration } from "../duration.js";
-import { nativeWarden } from "../native.js";
+import { nativeWarden, nativeWardenLoadError } from "../native.js";
 import type { TokenBlacklist } from "../TokenBlacklist.js";
 
 /**
@@ -47,6 +47,7 @@ function sign(payload: JwtClaims, secret: string): string {
 	if (!rust) {
 		throw new Error(
 			"[E_WARDEN_NAPI_REQUIRED] The Rust warden-engine binary is required. Build it with `cd packages/warden && pnpm build:napi`.",
+			{ cause: nativeWardenLoadError() },
 		);
 	}
 	return rust.jwtSign(JSON.stringify(payload), secret);
@@ -57,6 +58,7 @@ function verify(token: string, secret: string): JwtClaims | null {
 	if (!rust) {
 		throw new Error(
 			"[E_WARDEN_NAPI_REQUIRED] The Rust warden-engine binary is required. Build it with `cd packages/warden && pnpm build:napi`.",
+			{ cause: nativeWardenLoadError() },
 		);
 	}
 	try {

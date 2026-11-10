@@ -5,25 +5,41 @@
  * other consumer) throws `E_WARDEN_NAPI_REQUIRED` at use time. Password
  * hashing is the sole responsibility of `@c9up/sigil` (story 40.1).
  */
-import { loadNativeBinary } from "./vendor/nativeBinary.js";
+import { hasFunctions, loadNativeBinary } from "./vendor/nativeBinary.js";
 
 /**
- * The engine's surface, as the Rust declares it.
+ * What this package calls on the engine, typed as the Rust declares it.
  *
  * Derived from `./native/generated.js` — written by `pnpm build:napi-types`
  * from napi-derive's own `type-def` output — rather than restated here, where
  * nothing would notice a `pub fn` gaining a parameter or changing its return.
  */
-export type NativeWarden = typeof import("./native/generated.js");
+const NATIVE_CALLS = ["jwtSign", "jwtVerify"] as const;
+
+export type NativeWarden = Pick<
+	typeof import("./native/generated.js"),
+	(typeof NATIVE_CALLS)[number]
+>;
+
+/** What the package calls, checked at load: a stale binary loads just as well. */
+function isNativeWarden(value: unknown): value is NativeWarden {
+	return hasFunctions(value, NATIVE_CALLS);
+}
 
 // Absent is not an error here: `JwtStrategy` throws E_WARDEN_NAPI_REQUIRED at
 // use time, which names what the caller was trying to do. The loader reports
 // what happened and this decides — the platform table itself is shared, since
 // a package that misses a new target fails only on that platform.
-const attempt = loadNativeBinary<NativeWarden>();
+const attempt = loadNativeBinary(isNativeWarden);
 const native = attempt.loaded ? attempt.binary : undefined;
+const loadError = attempt.loaded ? undefined : attempt.cause;
 
 /** Get the native engine. Returns undefined if not loaded — caller must throw. */
 export function nativeWarden(): NativeWarden | undefined {
 	return native;
+}
+
+/** Why the engine is not loaded, for the `cause` of the error a caller throws. */
+export function nativeWardenLoadError(): unknown {
+	return loadError;
 }

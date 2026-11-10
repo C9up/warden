@@ -9,11 +9,21 @@
  */
 
 import type { RedisLikeClient } from "./RedisBlacklistDriver.js";
-import { quasarConnection as loadQuasarConnection } from "./vendor/quasarConnection.js";
+import {
+	hasCommands,
+	quasarConnection as loadQuasarConnection,
+} from "./vendor/quasarConnection.js";
 
 // Only what the driver documents itself as needing: `set` with an "EX" ttl,
 // and `exists`. Demanding key scans here would reject a client that works.
 const REQUIRED = ["set", "exists"] as const;
+
+/**
+ * The connection is handed over only once it carries every command above.
+ */
+function isRedisLikeClient(value: unknown): value is RedisLikeClient {
+	return hasCommands(value, REQUIRED);
+}
 
 /**
  * A resolver — quasar is loaded on first use, not at config time.
@@ -22,10 +32,11 @@ export function quasarConnection(
 	name?: string,
 ): () => Promise<RedisLikeClient> {
 	return async () =>
-		loadQuasarConnection<RedisLikeClient>({
+		loadQuasarConnection({
 			pkg: "warden",
 			name,
 			required: REQUIRED,
+			isConnection: isRedisLikeClient,
 			what: "the token blacklist",
 			raise: (_reason, message, cause) => new Error(message, { cause }),
 		});
