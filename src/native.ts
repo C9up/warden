@@ -30,7 +30,7 @@ function isNativeWarden(value: unknown): value is NativeWarden {
 // use time, which names what the caller was trying to do. The loader reports
 // what happened and this decides — the platform table itself is shared, since
 // a package that misses a new target fails only on that platform.
-const attempt = loadNativeBinary(isNativeWarden);
+const attempt = loadNativeBinary(isNativeWarden, NATIVE_CALLS);
 const native = attempt.loaded ? attempt.binary : undefined;
 const loadError = attempt.loaded ? undefined : attempt.cause;
 
