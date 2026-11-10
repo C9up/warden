@@ -103,8 +103,8 @@ jobs:
           - { os: ubuntu-24.04-arm, suffix: linux-arm64-gnu, target: aarch64-unknown-linux-gnu, test: true }
           # darwin-x64 is cross-compiled on an arm64 runner (macos-13 Intel
           # runners are scarce/deprecated); build-only, tests cover darwin-arm64.
-          - { os: macos-14,         suffix: darwin-x64,      target: x86_64-apple-darwin,       test: false }
-          - { os: macos-14,         suffix: darwin-arm64,    target: aarch64-apple-darwin,      test: true }
+          - { os: macos-15,         suffix: darwin-x64,      target: x86_64-apple-darwin,       test: false }
+          - { os: macos-15,         suffix: darwin-arm64,    target: aarch64-apple-darwin,      test: true }
           - { os: windows-latest,   suffix: win32-x64-msvc,  target: x86_64-pc-windows-msvc,    test: true }
     steps:
       - uses: actions/checkout@v6
