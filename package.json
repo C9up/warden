@@ -50,14 +50,18 @@
     }
   },
   "peerDependencies": {
+    "@c9up/inker": "^0.1.20",
     "@c9up/quasar": "^0.1.0 || ^0.2.0",
     "@c9up/ream": "^0.2.28"
   },
   "peerDependenciesMeta": {
-    "@c9up/ream": {
+    "@c9up/inker": {
       "optional": true
     },
     "@c9up/quasar": {
+      "optional": true
+    },
+    "@c9up/ream": {
       "optional": true
     }
   },
@@ -76,6 +80,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
+    "@c9up/inker": "^0.1.20",
     "@c9up/quasar": "^0.1.0 || ^0.2.0",
     "@c9up/ream": "^0.2.25",
     "@types/node": "^22.20.1",
