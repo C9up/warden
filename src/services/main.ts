@@ -11,6 +11,7 @@
  */
 
 import type { AuthManager } from "../AuthManager.js";
+import { WardenError } from "../errors.js";
 
 let instance: AuthManager | undefined;
 
@@ -42,8 +43,16 @@ const target: AuthManager = Object.create(null);
 
 const auth: AuthManager = new Proxy(target, {
 	get(_target, prop) {
+		// Whatever inspects a value before using it reads `then` (a promise or an
+		// async factory resolving with it decides whether it is thenable) and
+		// symbols (inspection, coercion, module interop). None is a member of
+		// AuthManager, so answer undefined and let a genuine access report.
+		if (typeof prop === "symbol" || prop === "then") {
+			return undefined;
+		}
 		if (!instance) {
-			throw new Error(
+			throw new WardenError(
+				"NOT_BOOTED",
 				"[warden] AuthManager singleton accessed before WardenProvider.boot() ran. " +
 					"Check that `@c9up/warden/provider` is listed in your reamrc.ts providers.",
 			);
