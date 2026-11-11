@@ -35,7 +35,7 @@ authorization; an override inherits them too unless it declares its own.
 - Multi-strategy AuthManager (JWT, session, access tokens, HTTP Basic)
 - `@Guard()`, `@Permission()`, `@Role()` decorators
 - RBAC: `hasRole`, `hasPermission`, `hasAllPermissions`
-- Unified authorization: Bouncer-shaped abilities & policies over one resolver — RBAC + ACL + ownership + multi-tenant scope, zero `@adonisjs/bouncer` dependency
+- Unified authorization: abilities & policies (`Bouncer`) over one resolver — RBAC + ACL + ownership + multi-tenant scope, zero dependency
 - Strategy exception safety (catch → AuthResult)
 - Runtime strategy registration
 - **Multi-factor authentication** — TOTP, backup codes, email/SMS OTP, WebAuthn/passkeys, all dependency-free
