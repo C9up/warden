@@ -357,7 +357,12 @@ export class Bouncer {
 	}
 
 	#resolveAbility(name: string): Ability<never[]> {
-		const found = this.#abilities[name];
+		// Own keys only: the registry is a plain object, and a name never
+		// registered ("constructor", "toString") must not resolve to an
+		// Object.prototype member and fail as a TypeError.
+		const found = Object.hasOwn(this.#abilities, name)
+			? this.#abilities[name]
+			: undefined;
 		if (found === undefined) {
 			throw new WardenError(
 				"UNKNOWN_ABILITY",
@@ -373,7 +378,9 @@ export class Bouncer {
 		// name surfaces as a promise rejection (like every other verb error),
 		// not a synchronous throw at `with()` time.
 		return () => {
-			const ctor = this.#policies[name];
+			const ctor = Object.hasOwn(this.#policies, name)
+				? this.#policies[name]
+				: undefined;
 			if (ctor === undefined) {
 				throw new WardenError(
 					"UNKNOWN_POLICY",

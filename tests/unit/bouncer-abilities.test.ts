@@ -113,6 +113,36 @@ describe("warden > bouncer > abilities", () => {
 		});
 	});
 
+	// The registry is a plain object: a name it never registered must not
+	// resolve to an Object.prototype member (a TypeError, a 500 over HTTP).
+	it.each([
+		"constructor",
+		"toString",
+		"hasOwnProperty",
+		"__proto__",
+		"valueOf",
+	])(
+		"throws E_WARDEN_UNKNOWN_ABILITY for the prototype key %s",
+		async (name) => {
+			const bouncer = new Bouncer(user());
+			await expect(bouncer.allows(name)).rejects.toMatchObject({
+				code: "E_WARDEN_UNKNOWN_ABILITY",
+			});
+			await expect(bouncer.denies(name)).rejects.toMatchObject({
+				code: "E_WARDEN_UNKNOWN_ABILITY",
+			});
+		},
+	);
+
+	it.each(["constructor", "toString", "__proto__"])(
+		"throws E_WARDEN_UNKNOWN_POLICY for the prototype key %s",
+		async (name) => {
+			await expect(
+				new Bouncer(user()).with(name).allows("edit"),
+			).rejects.toMatchObject({ code: "E_WARDEN_UNKNOWN_POLICY" });
+		},
+	);
+
 	it("the deny() convenience mirrors AuthorizationResponse.deny (no default status)", () => {
 		const bouncer = new Bouncer(user());
 		expect(bouncer.deny().status).toBeUndefined();
