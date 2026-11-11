@@ -243,6 +243,39 @@ describe("warden > decorators", () => {
 });
 
 describe("warden > security hardening", () => {
+	it("JwtStrategy refuses a validly signed token with no exp", async () => {
+		// The wrapper only parses what the engine returns, so exp being
+		// mandatory is entirely the engine's: a token without one would be
+		// valid forever once stolen.
+		const { createHmac } = await import("node:crypto");
+		const secret = "x".repeat(32);
+		const b64u = (o: object) =>
+			Buffer.from(JSON.stringify(o)).toString("base64url");
+		const now = Math.floor(Date.now() / 1000);
+		const head = b64u({ alg: "HS256", typ: "JWT" });
+		const sign = (claims: object) => {
+			const body = b64u(claims);
+			const sig = createHmac("sha256", secret)
+				.update(`${head}.${body}`)
+				.digest("base64url");
+			return `${head}.${body}.${sig}`;
+		};
+		const jwt = new JwtStrategy({
+			secret,
+			findUser: async (id) => ({ id }),
+			verifyCredentials: async () => null,
+		});
+
+		// Control: the same claims WITH exp authenticate.
+		const withExp = await jwt.verify(
+			sign({ sub: "u1", iat: now, jti: "j1", exp: now + 3600 }),
+		);
+		expect(withExp.authenticated).toBe(true);
+
+		const noExp = await jwt.verify(sign({ sub: "u1", iat: now, jti: "j2" }));
+		expect(noExp.authenticated).toBe(false);
+	});
+
 	it("the engine refuses a signed token whose payload is not a JSON object", async () => {
 		// The exported jwtVerify promises the exp check; a non-JSON payload
 		// skipped it and came back as Ok.

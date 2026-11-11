@@ -202,6 +202,33 @@ mod tests {
     }
 
     #[test]
+    fn test_missing_exp_rejected() {
+        // `exp` is what bounds the life of a stolen HS256 token; a payload
+        // without one must not verify, however valid the signature.
+        let secret = b"my-secret-key-at-least-32-bytes!";
+        let token = sign(r#"{"sub":"1"}"#, secret).unwrap();
+        let result = verify(&token, secret);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("missing exp"));
+    }
+
+    #[test]
+    fn test_non_integer_exp_rejected() {
+        // An `exp` that is not an integer is no expiry at all.
+        let secret = b"my-secret-key-at-least-32-bytes!";
+        for payload in [
+            r#"{"sub":"1","exp":"9999999999"}"#,
+            r#"{"sub":"1","exp":null}"#,
+            r#"{"sub":"1","exp":true}"#,
+        ] {
+            let token = sign(payload, secret).unwrap();
+            let result = verify(&token, secret);
+            assert!(result.is_err(), "payload {payload} was accepted");
+            assert!(result.unwrap_err().contains("missing exp"));
+        }
+    }
+
+    #[test]
     fn test_non_json_payload_rejected() {
         // A correctly signed token whose payload is not JSON used to skip the
         // claim checks entirely and come back as `Ok`, with no expiry enforced.
