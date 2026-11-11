@@ -19,6 +19,7 @@ import {
 	Role,
 	TokenBlacklist,
 } from "../../src/index.js";
+import { nativeWarden } from "../../src/native.js";
 
 /** Narrow away null/undefined without a `!` assertion (which lies to the compiler). */
 function defined<T>(value: T | null | undefined): T {
@@ -242,6 +243,27 @@ describe("warden > decorators", () => {
 });
 
 describe("warden > security hardening", () => {
+	it("the engine refuses a signed token whose payload is not a JSON object", async () => {
+		// The exported jwtVerify promises the exp check; a non-JSON payload
+		// skipped it and came back as Ok.
+		const { createHmac } = await import("node:crypto");
+		const rust = nativeWarden();
+		if (!rust) throw new Error("the warden engine binary is not loaded");
+		const secret = "x".repeat(32);
+		const head = Buffer.from('{"alg":"HS256","typ":"JWT"}').toString(
+			"base64url",
+		);
+		for (const payload of ["hello", "[1]", "9999999999", "null"]) {
+			const body = Buffer.from(payload).toString("base64url");
+			const sig = createHmac("sha256", secret)
+				.update(`${head}.${body}`)
+				.digest("base64url");
+			expect(() => rust.jwtVerify(`${head}.${body}.${sig}`, secret)).toThrow(
+				/not a JSON object/,
+			);
+		}
+	});
+
 	it("JwtStrategy rejects payloads with non-string sub", async () => {
 		const jwt = new JwtStrategy({
 			secret: "x".repeat(32),

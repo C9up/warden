@@ -30,7 +30,8 @@ pub fn sign(payload: &str, secret: &[u8]) -> Result<String, String> {
 }
 
 /// Verify a JWT token and return the decoded payload.
-/// Validates signature (constant-time) and `exp` claim if present.
+/// Validates the signature (constant-time), that the payload is a JSON object,
+/// the mandatory `exp` claim and, when present, `nbf`.
 /// Secret must be at least 32 bytes.
 pub fn verify(token: &str, secret: &[u8]) -> Result<String, String> {
     if secret.len() < 32 {
@@ -75,26 +76,28 @@ pub fn verify(token: &str, secret: &[u8]) -> Result<String, String> {
     let payload_str =
         String::from_utf8(payload_bytes).map_err(|_| "Payload is not valid UTF-8".to_string())?;
 
-    // Validate exp claim — MANDATORY (aligned with TS fallback path).
-    // A token without exp is rejected to prevent indefinitely-valid tokens.
-    if let Ok(claims) = serde_json::from_str::<serde_json::Value>(&payload_str) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        match claims["exp"].as_i64() {
-            Some(exp) if now > exp => return Err("Token expired".to_string()),
-            Some(_) => {} // valid
-            None => return Err("Token missing exp claim".to_string()),
-        }
-        if let Some(nbf) = claims["nbf"].as_i64() {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
-            if now < nbf {
-                return Err("Token not yet valid".to_string());
-            }
+    // The claims must be a JSON object. A payload that is not one (not JSON
+    // at all, or an array, a string, a number) carries no `exp` to check, and
+    // returning it as `Ok` handed a never-expiring token to the caller.
+    let claims: serde_json::Value = serde_json::from_str(&payload_str)
+        .map_err(|_| "Payload is not a JSON object".to_string())?;
+    if !claims.is_object() {
+        return Err("Payload is not a JSON object".to_string());
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    // `exp` is MANDATORY: a token without one would be valid forever.
+    match claims["exp"].as_i64() {
+        Some(exp) if now > exp => return Err("Token expired".to_string()),
+        Some(_) => {} // valid
+        None => return Err("Token missing exp claim".to_string()),
+    }
+    if let Some(nbf) = claims["nbf"].as_i64() {
+        if now < nbf {
+            return Err("Token not yet valid".to_string());
         }
     }
 
@@ -196,6 +199,28 @@ mod tests {
         let result = verify(&fake_token, secret);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Unsupported JWT algorithm"));
+    }
+
+    #[test]
+    fn test_non_json_payload_rejected() {
+        // A correctly signed token whose payload is not JSON used to skip the
+        // claim checks entirely and come back as `Ok`, with no expiry enforced.
+        let secret = b"my-secret-key-at-least-32-bytes!";
+        let token = sign("hello", secret).unwrap();
+        let result = verify(&token, secret);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not a JSON object"));
+    }
+
+    #[test]
+    fn test_non_object_json_payload_rejected() {
+        let secret = b"my-secret-key-at-least-32-bytes!";
+        for payload in ["[1,2]", r#""exp""#, "9999999999", "null", "true"] {
+            let token = sign(payload, secret).unwrap();
+            let result = verify(&token, secret);
+            assert!(result.is_err(), "payload {payload} was accepted");
+            assert!(result.unwrap_err().contains("not a JSON object"));
+        }
     }
 
     #[test]
