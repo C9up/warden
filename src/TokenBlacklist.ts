@@ -16,12 +16,34 @@ export interface BlacklistDriver {
 	cleanup?(): Promise<void>;
 }
 
-/** In-memory blacklist for development. */
+/** In-memory blacklist for development, and the resilient driver's fallback. */
 export class MemoryBlacklistDriver implements BlacklistDriver {
 	#entries: Map<string, number> = new Map();
 
+	/**
+	 * Size at which the next sweep runs, doubling each time.
+	 *
+	 * Expired entries used to leave only on a `has()` of that exact jti or an
+	 * explicit `cleanup()`, which nothing calls. Every logout and every
+	 * `revoke()` added one, and `ResilientBlacklistDriver` writes every
+	 * revocation into this store, so a long-lived process grew without bound.
+	 * Sweeping on write bounds the map by the revocations still live, without
+	 * a timer that would hold the event loop open. There is no ceiling that
+	 * evicts: dropping a live entry would un-revoke a token.
+	 */
+	#sweepAt = 64;
+
+	/** Entries currently held, live or not yet swept. */
+	get size(): number {
+		return this.#entries.size;
+	}
+
 	async add(jti: string, expiresAt: number): Promise<void> {
+		// Already past its deadline: `has()` would answer false for it anyway,
+		// so storing it only costs memory.
+		if (expiresAt < Date.now()) return;
 		this.#entries.set(jti, expiresAt);
+		if (this.#entries.size > this.#sweepAt) this.#sweep();
 	}
 
 	async has(jti: string): Promise<boolean> {
@@ -35,10 +57,15 @@ export class MemoryBlacklistDriver implements BlacklistDriver {
 	}
 
 	async cleanup(): Promise<void> {
+		this.#sweep();
+	}
+
+	#sweep(): void {
 		const now = Date.now();
 		for (const [jti, exp] of this.#entries) {
 			if (exp < now) this.#entries.delete(jti);
 		}
+		this.#sweepAt = Math.max(64, this.#entries.size * 2);
 	}
 }
 

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ResilientBlacklistDriver } from "../../src/ResilientBlacklistDriver.js";
 import {
 	MemoryBlacklistDriver,
 	TokenBlacklist,
@@ -77,5 +78,64 @@ describe("warden > TokenBlacklist (driver delegation)", () => {
 			["has", ["fresh"]],
 			["cleanup", []],
 		]);
+	});
+});
+
+/**
+ * Expired revocations leave without anyone calling `cleanup()`.
+ *
+ * Entries left only on a `has()` of that exact jti or an explicit cleanup,
+ * which nothing wires. Every logout and every `revoke()` added one, and the
+ * resilient driver writes every revocation into its in-memory fallback, so a
+ * long-lived process (or a user scripting login/logout) grew the heap without
+ * bound.
+ */
+describe("warden > the in-memory revocation list sweeps itself", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("stays bounded across 100 000 short-lived revocations", async () => {
+		const driver = new MemoryBlacklistDriver();
+		for (let i = 0; i < 100_000; i++) {
+			await driver.add(`jti-${i}`, Date.now() + 10);
+			vi.advanceTimersByTime(1);
+		}
+		// Only the revocations still live (about ten) plus at most one sweep
+		// interval of expired ones may remain.
+		expect(driver.size).toBeLessThanOrEqual(128);
+	});
+
+	it("never drops a revocation that is still live", async () => {
+		const driver = new MemoryBlacklistDriver();
+		await driver.add("live", Date.now() + 3_600_000);
+		for (let i = 0; i < 5_000; i++) {
+			await driver.add(`short-${i}`, Date.now() + 1);
+			vi.advanceTimersByTime(2);
+		}
+		expect(await driver.has("live")).toBe(true);
+	});
+
+	it("does not store a revocation that has already expired", async () => {
+		const driver = new MemoryBlacklistDriver();
+		await driver.add("stale", Date.now() - 1);
+		expect(driver.size).toBe(0);
+		expect(await driver.has("stale")).toBe(false);
+	});
+
+	it("bounds the resilient driver's fallback with a healthy primary", async () => {
+		const fallback = new MemoryBlacklistDriver();
+		const primary = new MemoryBlacklistDriver();
+		const resilient = new ResilientBlacklistDriver(primary, fallback);
+		for (let i = 0; i < 20_000; i++) {
+			await resilient.add(`jti-${i}`, Date.now() + 10);
+			vi.advanceTimersByTime(1);
+		}
+		expect(fallback.size).toBeLessThanOrEqual(128);
 	});
 });

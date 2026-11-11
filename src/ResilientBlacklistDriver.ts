@@ -108,7 +108,8 @@ export class ResilientBlacklistDriver implements BlacklistDriver {
 		// The fallback first, and unconditionally: it is what this instance
 		// knows it revoked. Recording only on failure left every revocation made
 		// while the primary was healthy invisible to the fallback — and those are
-		// most of them.
+		// most of them. The default fallback sweeps expired entries on write,
+		// so recording every revocation keeps only the live ones.
 		await this.#fallback.add(jti, expiresAt);
 		try {
 			await this.#primary.add(jti, expiresAt);
