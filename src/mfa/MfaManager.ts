@@ -106,7 +106,11 @@ export interface MfaManagerConfig {
 	totp?: TotpProvider;
 	backupCodes?: BackupCodesProvider;
 	store?: MfaFactorStore;
-	/** Per-user brute-force protection on `verify()`. Defaults to 5 / 15 min. */
+	/**
+	 * Per-user brute-force protection on `verify()`, `verifyTotp()`,
+	 * `verifyBackupCode()` and `confirmTotp()`, one shared count. Defaults to
+	 * 5 / 15 min.
+	 */
 	rateLimit?: MfaRateLimitConfig;
 }
 
@@ -188,9 +192,23 @@ export class MfaManager {
 		return true;
 	}
 
-	/** Verify a TOTP code against the user's confirmed authenticator factors. */
+	/**
+	 * Verify a TOTP code against the user's confirmed authenticator factors.
+	 *
+	 * Counts against the same per-user lockout as {@link verify}: an app
+	 * calling this directly (to tell the factors apart in its UI) must not get
+	 * unlimited guesses at a six-digit code.
+	 */
 	async verifyTotp(userId: string, code: string): Promise<boolean> {
 		const totp = this.#requireTotp();
+		return this.#limited(userId, () => this.#checkTotp(totp, userId, code));
+	}
+
+	async #checkTotp(
+		totp: TotpProvider,
+		userId: string,
+		code: string,
+	): Promise<boolean> {
 		const factors = await this.#store.findByUser(userId);
 		// Sequential, not Promise.all: the replay guard must see one accepted
 		// code at a time, and stopping at the first match avoids burning the
@@ -237,9 +255,22 @@ export class MfaManager {
 		return codes;
 	}
 
-	/** Verify and consume one backup code for the user. */
+	/**
+	 * Verify and consume one backup code for the user. Counts against the same
+	 * per-user lockout as {@link verify}.
+	 */
 	async verifyBackupCode(userId: string, code: string): Promise<boolean> {
 		const provider = this.#requireBackupCodes();
+		return this.#limited(userId, () =>
+			this.#checkBackupCode(provider, userId, code),
+		);
+	}
+
+	async #checkBackupCode(
+		provider: BackupCodesProvider,
+		userId: string,
+		code: string,
+	): Promise<boolean> {
 		const factors = await this.#store.findByUser(userId);
 		for (const factor of factors) {
 			if (factor.kind !== "backup_codes" || !factor.backupHashes) {
@@ -265,28 +296,40 @@ export class MfaManager {
 	 * factors first, then falls back to consuming a backup code.
 	 */
 	async verify(userId: string, code: string): Promise<boolean> {
-		// Counted BEFORE the code is checked, by one atomic increment: reading
-		// "not locked" first and counting the failure after let a burst of
-		// concurrent attempts all reach the providers.
+		// One attempt for the code, whichever factor ends up answering it.
+		return this.#limited(userId, async () => {
+			const totp = this.#totp;
+			if (totp && (await this.#checkTotp(totp, userId, code))) return true;
+			const backupCodes = this.#backupCodes;
+			return (
+				backupCodes !== undefined &&
+				(await this.#checkBackupCode(backupCodes, userId, code))
+			);
+		});
+	}
+
+	/**
+	 * Run one code check under the per-user lockout.
+	 *
+	 * Counted BEFORE the code is checked, by one atomic increment: reading
+	 * "not locked" first and counting the failure after let a burst of
+	 * concurrent attempts all reach the providers. A success clears the count.
+	 */
+	async #limited(
+		userId: string,
+		check: () => Promise<boolean>,
+	): Promise<boolean> {
 		const key = lockoutKey(userId);
 		if (!(await this.#limiter.attempt(key)).allowed) {
 			return false;
 		}
-		let ok = false;
-		if (this.#totp && (await this.verifyTotp(userId, code))) {
-			ok = true;
-		} else if (
-			this.#backupCodes &&
-			(await this.verifyBackupCode(userId, code))
-		) {
-			ok = true;
-		}
+		const ok = await check();
 		if (ok) await this.#limiter.clear(key);
 		return ok;
 	}
 
 	/**
-	 * Whether the user is currently locked out of `verify()` after too many
+	 * Whether the user is currently locked out of the code checks after too many
 	 * failed attempts. Use it to surface a "try again later" message.
 	 */
 	isLocked(userId: string): Promise<boolean> {

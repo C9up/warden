@@ -228,6 +228,56 @@ describe("warden > MfaManager — rate limit", () => {
 		expect(await m.verify(USER.id, totp.generate(secret))).toBe(false);
 	});
 
+	// verifyTotp and verifyBackupCode are public on the manager the app
+	// resolves. Without counting, an app calling them directly (to tell the
+	// two factors apart in its UI) offered unlimited guesses: a 6-digit TOTP
+	// over a one-step window falls to about 3e5 tries.
+	it("locks verifyTotp() after too many failures, on the same lockout as verify()", async () => {
+		const { m, totp, secret } = await enrolled(3);
+		for (let i = 0; i < 3; i++) {
+			expect(await m.verifyTotp(USER.id, `00000${i}`)).toBe(false);
+		}
+		expect(await m.isLocked(USER.id)).toBe(true);
+		expect(await m.verifyTotp(USER.id, totp.generate(secret))).toBe(false);
+		expect(await m.verify(USER.id, totp.generate(secret))).toBe(false);
+	});
+
+	it("a verifyTotp() success resets the counter", async () => {
+		const { m, totp, secret } = await enrolled(3);
+		expect(await m.verifyTotp(USER.id, "000000")).toBe(false);
+		expect(await m.verifyTotp(USER.id, "000001")).toBe(false);
+		expect(await m.verifyTotp(USER.id, totp.generate(secret))).toBe(true);
+		expect(await m.verifyTotp(USER.id, "000002")).toBe(false);
+		expect(await m.isLocked(USER.id)).toBe(false);
+	});
+
+	it("locks verifyBackupCode() after too many failures", async () => {
+		const m = new MfaManager({
+			issuer: "Fluveo",
+			backupCodes: new BackupCodesProvider({ count: 5 }),
+			rateLimit: { maxAttempts: 3 },
+		});
+		const codes = await m.createBackupCodes(USER.id);
+		for (let i = 0; i < 3; i++) {
+			expect(await m.verifyBackupCode(USER.id, `wrong-${i}`)).toBe(false);
+		}
+		expect(await m.isLocked(USER.id)).toBe(true);
+		expect(await m.verifyBackupCode(USER.id, defined(codes[0]))).toBe(false);
+	});
+
+	it("verify() counts one attempt, not one per factor tried", async () => {
+		const m = new MfaManager({
+			issuer: "Fluveo",
+			totp: new TotpProvider(),
+			backupCodes: new BackupCodesProvider({ count: 5 }),
+			rateLimit: { maxAttempts: 2 },
+		});
+		await m.createBackupCodes(USER.id);
+		// A wrong code is tried against TOTP and then backup codes: still one.
+		expect(await m.verify(USER.id, "000000")).toBe(false);
+		expect(await m.isLocked(USER.id)).toBe(false);
+	});
+
 	it("a success resets the failure counter", async () => {
 		const { m, totp, secret } = await enrolled(3);
 		expect(await m.verify(USER.id, "000000")).toBe(false);
