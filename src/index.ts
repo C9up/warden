@@ -162,12 +162,15 @@ export type {
 } from "./RedisBlacklistDriver.js";
 export { RedisBlacklistDriver } from "./RedisBlacklistDriver.js";
 export type {
+	MintedRefreshToken,
 	RefreshTokenDriver,
 	StoredRefreshToken,
 } from "./RefreshTokenStore.js";
 export {
 	generateRefreshToken,
+	hashRefreshToken,
 	MemoryRefreshTokenDriver,
+	mintRefreshToken,
 } from "./RefreshTokenStore.js";
 export {
 	DEFAULT_SECRET_LENGTH,
