@@ -23,6 +23,7 @@ import type {
 import { readBearerToken } from "./bearer.js";
 import { E_UNAUTHORIZED_ACCESS, WardenError } from "./errors.js";
 import type { WardenContext } from "./middleware.js";
+import type { Scope } from "./rights/types.js";
 import { sanitizePayload } from "./sanitize.js";
 import {
 	createSessionGuardState,
@@ -646,9 +647,42 @@ export class Authenticator {
 		return this.#user?.roles;
 	}
 
-	/** Permissions of the authenticated user (see {@link Authenticator.roles}). */
+	/**
+	 * Permissions the authenticated user's PAYLOAD carries (see
+	 * {@link Authenticator.roles}). Informational only: a decision goes through
+	 * {@link Authenticator.hasPermission}, which consults the rights resolver.
+	 */
 	get permissions(): string[] | undefined {
 		return this.#user?.permissions;
+	}
+
+	/**
+	 * Whether the authenticated user may do `permission` within `scope`.
+	 *
+	 * Delegates to {@link AuthManager.hasPermission}: the rights resolver decides
+	 * (roles and grants from the store, never the payload's `permissions`), and
+	 * the access token the request came with narrows it. A guest holds nothing.
+	 *
+	 * No upstream shape to mirror: the upstream authenticator has no notion of
+	 * permissions. This is how a host's gates reach warden's rights layer
+	 * through `ctx.auth` without importing warden.
+	 */
+	async hasPermission(permission: string, scope?: Scope): Promise<boolean> {
+		if (this.#user === undefined) return false;
+		return this.#auth.hasPermission(this.#user, permission, scope);
+	}
+
+	/**
+	 * Whether the authenticated user may do every one of `permissions` within
+	 * `scope` — {@link Authenticator.hasPermission} for a list. A guest holds
+	 * nothing, not even the empty list.
+	 */
+	async hasAllPermissions(
+		permissions: readonly string[],
+		scope?: Scope,
+	): Promise<boolean> {
+		if (this.#user === undefined) return false;
+		return this.#auth.hasAllPermissions(this.#user, permissions, scope);
 	}
 
 	/** Authenticate via the default guard. Throws `E_UNAUTHORIZED_ACCESS` on failure. */

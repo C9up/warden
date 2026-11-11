@@ -388,7 +388,7 @@ export class AuthManager {
 	 */
 	async hasAllPermissions(
 		user: UserPayload,
-		permissions: string[],
+		permissions: readonly string[],
 		scope: Scope = "global",
 	): Promise<boolean> {
 		if (!permissions.every((p) => tokenAllows(user, p))) return false;

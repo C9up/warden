@@ -176,7 +176,19 @@ export interface WardenContext {
 			[key: string]: unknown;
 		};
 		roles?: string[];
+		/** What the payload carries — not an authorization input. */
 		permissions?: string[];
+		/**
+		 * The permission check a gate must use: resolved through the rights
+		 * resolver and narrowed by the request's access token. Optional, like the
+		 * rest of this structural slot, so a host's own auth state still fits.
+		 */
+		hasPermission?(permission: string, scope?: Scope): Promise<boolean>;
+		/** {@link hasPermission} for a list: true only when every one holds. */
+		hasAllPermissions?(
+			permissions: readonly string[],
+			scope?: Scope,
+		): Promise<boolean>;
 		authenticate?(): Promise<void>;
 		check?(): Promise<boolean>;
 		getUserOrFail?(): { id: string; [key: string]: unknown } | undefined;
