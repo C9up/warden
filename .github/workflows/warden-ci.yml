@@ -123,7 +123,10 @@ jobs:
       # And clippy, as an error rather than a note. `cargo fmt --check` was
       # gating the formatting while nothing gated the lints that catch a real
       # defect — the one place the compiler stays silent and clippy does not.
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # `--locked` here, in `cargo test` and in `build:rust`: a Cargo.toml that
+      # drifted from Cargo.lock fails the release instead of being re-resolved
+      # on each runner, so the shipped binary is built from the recorded set.
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # Two reporters on purpose: the JSON one feeds the smoke gate, the default
       # one is what a human reads. With JSON alone a failure printed an exit
       # code and not one word about which test failed.
@@ -200,7 +203,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --workspace
+      - run: cargo test --locked --workspace
 
   # Integration layer: the Redis-backed suites. They live outside the default
   # vitest config because they skip without a server, and the smoke gate above
