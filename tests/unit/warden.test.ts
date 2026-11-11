@@ -1,5 +1,5 @@
 import "reflect-metadata";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	AccessTokensProvider,
 	MemoryAccessTokenStore,
@@ -18,6 +18,7 @@ import {
 	Permission,
 	Role,
 	TokenBlacklist,
+	WardenError,
 } from "../../src/index.js";
 import { nativeWarden } from "../../src/native.js";
 
@@ -137,14 +138,58 @@ describe("warden > AuthManager", () => {
 		expect(() => auth.getStrategy("nonexistent")).toThrow("Auth strategy");
 	});
 
-	it("catches strategy exceptions on authenticate", async () => {
+	it("reports a strategy that throws on authenticate as a crash, without its text", async () => {
 		const auth = new AuthManager({
-			defaultStrategy: "throwing",
-			strategies: { throwing: throwingStrategy },
+			defaultStrategy: "db",
+			strategies: {
+				db: {
+					name: "db",
+					async authenticate() {
+						throw new Error("connect ECONNREFUSED 10.0.0.5:5432");
+					},
+					async verify() {
+						return { authenticated: false };
+					},
+				},
+			},
 		});
-		const result = await auth.authenticate({ email: "test" });
-		expect(result.authenticated).toBe(false);
-		expect(result.error).toBe("Network timeout");
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const result = await auth.authenticate({ email: "a", password: "b" });
+
+			// An outage is not a wrong password: the caller can tell them apart,
+			// and the host and port stay out of whatever renders the result.
+			expect(result).toEqual({ authenticated: false, strategyCrash: true });
+			expect(JSON.stringify(result)).not.toContain("ECONNREFUSED");
+			// The cause still reaches the operator.
+			expect(logged).toHaveBeenCalledTimes(1);
+			expect(logged.mock.calls[0]?.join(" ")).toContain("'db'");
+			expect(String(logged.mock.calls[0]?.[1])).toContain(
+				"ECONNREFUSED 10.0.0.5:5432",
+			);
+		} finally {
+			logged.mockRestore();
+		}
+	});
+
+	it("still rethrows a WardenError from authenticate", async () => {
+		const auth = new AuthManager({
+			defaultStrategy: "session",
+			strategies: {
+				session: {
+					name: "session",
+					async authenticate() {
+						throw new WardenError("USE_LOGIN", "use login()");
+					},
+					async verify() {
+						return { authenticated: false };
+					},
+				},
+			},
+		});
+		await expect(auth.authenticate({})).rejects.toMatchObject({
+			code: "E_WARDEN_USE_LOGIN",
+		});
 	});
 
 	it("catches strategy exceptions on verify", async () => {

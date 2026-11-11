@@ -61,11 +61,13 @@ export interface AuthResult {
 	user?: UserPayload;
 	error?: string;
 	/**
-	 * @internal Set when the strategy's `verify()` / `authenticate()` THREW
-	 * a generic error (vs returned a deliberate `{ authenticated: false }`
-	 * rejection). The middleware uses this to distinguish credential
-	 * failures (→ 401) from strategy crashes (→ 500). Not part of the
-	 * public consumer-facing API.
+	 * Set when the strategy's `verify()` / `authenticate()` THREW a generic
+	 * error, as opposed to returning a deliberate `{ authenticated: false }`
+	 * rejection: a server incident (the user store is down), not bad
+	 * credentials. A caller answers it as unavailable (500), does not count it
+	 * against the user's failed attempts, and does not tell the user their
+	 * password is wrong. `authenticate()` carries no `error` text with it; the
+	 * cause is in the server log.
 	 */
 	strategyCrash?: true;
 }
@@ -271,13 +273,18 @@ export class AuthManager {
 		} catch (err) {
 			// Re-throw structured WardenError sentinels (e.g. SessionStrategy's
 			// USE_LOGIN throw) so callers see the design-boundary signal instead
-			// of a soft `{ authenticated: false }`. Generic errors stay soft.
+			// of a soft `{ authenticated: false }`.
 			if (err instanceof WardenError) throw err;
-			return {
-				authenticated: false,
-				error:
-					err instanceof Error ? err.message : "Unknown authentication error",
-			};
+			// Anything else is an outage (a database down, a driver bug), not a
+			// wrong password: flag it so the caller does not answer "invalid
+			// credentials" or count it as a failed attempt. The thrown text names
+			// hosts, ports and queries, so it goes to the server log and never
+			// into the result a caller may render.
+			console.error(
+				`[warden] strategy '${strategyName ?? this.#default}' threw during authenticate():`,
+				err,
+			);
+			return { authenticated: false, strategyCrash: true };
 		}
 	}
 
