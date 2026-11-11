@@ -394,6 +394,10 @@ export class GuardAccessor {
 			this.#state,
 		);
 		if (!revived) return undefined;
+		// Same guard as every other path into `ctx.auth.user`, and BEFORE the
+		// session is seated with it: `findUser` may hand back a JSON-decoded
+		// row carrying an own `__proto__` / `constructor` key.
+		sanitizePayload(revived.user);
 
 		write.call(
 			this.#ctx.response,

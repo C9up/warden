@@ -548,7 +548,13 @@ export class AuthManager {
 				},
 			);
 		}
-		return strategy.authenticateViaRememberMeToken(cookieValue, state);
+		const revived = await strategy.authenticateViaRememberMeToken(
+			cookieValue,
+			state,
+		);
+		// The same prototype-pollution guard `verify` and `authenticate` apply.
+		if (revived) sanitizePayload(revived.user);
+		return revived;
 	}
 
 	/**
