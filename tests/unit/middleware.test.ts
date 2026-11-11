@@ -14,6 +14,7 @@ import WardenMiddleware, {
 import { MemoryRightsStore } from "../../src/rights/MemoryRightsStore.js";
 import { RightsResolver } from "../../src/rights/RightsResolver.js";
 import type { Scope } from "../../src/rights/types.js";
+import { JwtStrategy } from "../../src/strategies/JwtStrategy.js";
 import type { SessionStore } from "../../src/strategies/SessionStrategy.js";
 
 interface RecordedResponse {
@@ -691,6 +692,67 @@ describe("warden > wardenMiddleware — session strategy", () => {
 		expect(Object.hasOwn(user, "constructor")).toBe(false);
 		// And Object.prototype was not polluted.
 		expect(Reflect.get(Object.prototype, "polluted")).toBeUndefined();
+	});
+
+	// AuthManager.verify/authenticate strip the keys for every token guard;
+	// only the session path above was exercised with the hostile shape, so
+	// the guard on the bearer path could be dropped without a red test.
+	const HOSTILE_ROW =
+		'{"id":"u1","__proto__":{"polluted":true},"constructor":{"prototype":{"polluted":true}},"prototype":1}';
+	function expectNoPollutionKeys(user: object): void {
+		for (const key of ["__proto__", "constructor", "prototype"]) {
+			expect(Object.hasOwn(user, key)).toBe(false);
+		}
+		expect(Reflect.get(Object.prototype, "polluted")).toBeUndefined();
+	}
+
+	it("sanitizes prototype-pollution keys from a bearer-token user", async () => {
+		const jwt = new JwtStrategy({
+			secret: "s".repeat(32),
+			findUser: async () => JSON.parse(HOSTILE_ROW),
+			verifyCredentials: async () => null,
+		});
+		const manager = new AuthManager({
+			defaultStrategy: "jwt",
+			strategies: { jwt },
+		});
+		class JwtCtl {
+			@Guard("jwt")
+			async handler() {}
+		}
+		const { ctx, next } = buildCtx({
+			manager,
+			controller: JwtCtl.prototype,
+			action: "handler",
+			headers: { authorization: `Bearer ${jwt.signToken({ id: "u1" })}` },
+		});
+
+		await wardenMiddleware(ctx, next.fn);
+
+		expect(next.called).toBe(true);
+		const user = ctx.auth?.user ?? {};
+		expect(Reflect.get(user, "id")).toBe("u1");
+		expectNoPollutionKeys(user);
+	});
+
+	it("sanitizes prototype-pollution keys from a credentials sign-in", async () => {
+		const jwt = new JwtStrategy({
+			secret: "s".repeat(32),
+			findUser: async () => null,
+			verifyCredentials: async () => JSON.parse(HOSTILE_ROW),
+		});
+		const manager = new AuthManager({
+			defaultStrategy: "jwt",
+			strategies: { jwt },
+		});
+
+		const result = await manager.authenticate({
+			email: "a@b.c",
+			password: "pw",
+		});
+
+		expect(result.authenticated).toBe(true);
+		expectNoPollutionKeys(result.user ?? {});
 	});
 
 	it("skips session strategy when verifyWithContext is not implemented", async () => {
