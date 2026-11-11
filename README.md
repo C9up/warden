@@ -13,7 +13,9 @@ const auth = new AuthManager({
 })
 
 const result = await auth.authenticate({ email: 'admin@c9up.com', password: 'secret' })
-auth.hasRole(result.user!, 'admin') // true
+if (result.authenticated && result.user) {
+  await auth.hasRole(result.user, 'admin') // true
+}
 
 class OrderController {
   @Guard('jwt')
