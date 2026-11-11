@@ -23,6 +23,7 @@ import {
 	type AuthStrategy,
 	type UserPayload,
 } from "./AuthManager.js";
+import { readBearerToken } from "./bearer.js";
 import type { WardenConfig } from "./config.js";
 import { ApiKeyStrategy } from "./strategies/ApiKeyStrategy.js";
 import { JwtStrategy } from "./strategies/JwtStrategy.js";
@@ -127,11 +128,7 @@ export function createWarden(config: WardenConfig): Warden {
 
 		expressMiddleware() {
 			return (req, res, next) => {
-				const authHeader = req.headers?.authorization;
-				const token =
-					typeof authHeader === "string" && authHeader.startsWith("Bearer ")
-						? authHeader.slice(7)
-						: "";
+				const token = readBearerToken(req.headers?.authorization);
 
 				if (!token) {
 					fail(

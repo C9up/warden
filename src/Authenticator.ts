@@ -20,6 +20,7 @@ import type {
 	AuthStrategy,
 	UserPayload,
 } from "./AuthManager.js";
+import { readBearerToken } from "./bearer.js";
 import { E_UNAUTHORIZED_ACCESS, WardenError } from "./errors.js";
 import type { WardenContext } from "./middleware.js";
 import { sanitizePayload } from "./sanitize.js";
@@ -186,9 +187,7 @@ export function extractCredentials(
 ): ExtractedCredentials {
 	const headers = ctx.request.headers();
 	const authHeader = headers.authorization ?? "";
-	const bearerToken = authHeader.startsWith("Bearer ")
-		? authHeader.slice(7)
-		: "";
+	const bearerToken = readBearerToken(authHeader);
 	// The scheme is case-insensitive (RFC 7235); the strategy decodes the rest.
 	const basicAuth = /^basic\s/i.test(authHeader) ? authHeader : "";
 	// HTTP header names are case-insensitive; runtimes lowercase incoming keys,

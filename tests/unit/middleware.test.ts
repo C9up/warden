@@ -190,6 +190,44 @@ describe("warden > wardenMiddleware — bearer token extraction", () => {
 		expect(ctx.auth?.user).toEqual(okUser.user);
 	});
 
+	it.each(["bearer valid", "BEARER valid", "bEaReR valid"])(
+		"matches the scheme case-insensitively (%s)",
+		async (authorization) => {
+			// RFC 7235: the auth-scheme is case-insensitive, as Basic already was.
+			const manager = makeManager({ jwt: okJwtStrategy });
+			const { ctx, response, next } = buildCtx({
+				manager,
+				controller: GuardedController.prototype,
+				action: "handler",
+				headers: { authorization },
+			});
+
+			await wardenMiddleware(ctx, next.fn);
+
+			expect(next.called).toBe(true);
+			expect(response.status).toBeUndefined();
+			expect(ctx.auth?.user).toEqual(okUser.user);
+		},
+	);
+
+	it.each(["Bearer", "Bearer ", "Bearervalid", "Token valid"])(
+		"treats %j as no bearer credential",
+		async (authorization) => {
+			const manager = makeManager({ jwt: okJwtStrategy });
+			const { ctx, response, next } = buildCtx({
+				manager,
+				controller: GuardedController.prototype,
+				action: "handler",
+				headers: { authorization },
+			});
+
+			await wardenMiddleware(ctx, next.fn);
+
+			expect(next.called).toBe(false);
+			expect(response.status).toBe(401);
+		},
+	);
+
 	it("rejects an invalid Bearer token with 401", async () => {
 		const manager = makeManager({ jwt: okJwtStrategy });
 		const { ctx, response, next } = buildCtx({

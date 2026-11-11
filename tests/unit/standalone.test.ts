@@ -193,6 +193,17 @@ describe("warden > expressMiddleware", () => {
 		expect(out.req.user).toEqual({ ...SAMPLE_USER, mfa: false });
 	});
 
+	it("accepts a lower-case bearer scheme", async () => {
+		const warden = buildWarden();
+		const token = await warden.generateToken(SAMPLE_USER);
+		const out = await runExpress(warden, {
+			headers: { authorization: `bearer ${token}` },
+		});
+
+		expect(out.captured.status).toBeUndefined();
+		expect(out.nextCalled).toBe(true);
+	});
+
 	it("returns 401 on a malformed Bearer token", async () => {
 		const warden = buildWarden();
 		const out = await runExpress(warden, {
