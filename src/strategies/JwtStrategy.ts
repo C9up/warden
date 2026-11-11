@@ -26,8 +26,12 @@ export interface JwtClaims {
 	permissions?: string[];
 	iat: number;
 	exp: number;
-	/** RFC 7519 JWT ID — populated at sign time so revocation can target a single token. */
-	jti: string;
+	/**
+	 * RFC 7519 JWT ID — populated at sign time so revocation can target a
+	 * single token. Absent only on a token signed elsewhere, which a strategy
+	 * with a blacklist refuses (it could never be revoked).
+	 */
+	jti?: string;
 	[key: string]: unknown;
 }
 
@@ -61,14 +65,56 @@ function verify(token: string, secret: string): JwtClaims | null {
 			{ cause: nativeWardenLoadError() },
 		);
 	}
+	let parsed: unknown;
 	try {
-		const payloadJson = rust.jwtVerify(token, secret);
-		const payload = JSON.parse(payloadJson) as JwtClaims;
-		if (typeof payload.sub !== "string" || !payload.sub) return null;
-		return payload;
+		parsed = JSON.parse(rust.jwtVerify(token, secret));
 	} catch {
 		return null;
 	}
+	return toJwtClaims(parsed);
+}
+
+function isStringArray(value: unknown): value is string[] {
+	return Array.isArray(value) && value.every((v) => typeof v === "string");
+}
+
+/**
+ * The verified payload, if it has the shape {@link JwtClaims} promises.
+ *
+ * The signature proves who wrote the claims, not what they contain. Trusted
+ * as-is, a token without `iat` slipped past an app's "iat predates
+ * passwordChangedAt" check in `findUser` (`undefined < n` is false), and a
+ * non-string `jti` reached the blacklist. Anything off-shape is refused.
+ */
+function toJwtClaims(value: unknown): JwtClaims | null {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return null;
+	}
+	const sub: unknown = Reflect.get(value, "sub");
+	const iat: unknown = Reflect.get(value, "iat");
+	const exp: unknown = Reflect.get(value, "exp");
+	const jti: unknown = Reflect.get(value, "jti");
+	const roles: unknown = Reflect.get(value, "roles");
+	const permissions: unknown = Reflect.get(value, "permissions");
+	if (typeof sub !== "string" || sub.length === 0) return null;
+	if (typeof iat !== "number" || !Number.isFinite(iat)) return null;
+	if (typeof exp !== "number" || !Number.isFinite(exp)) return null;
+	if (jti !== undefined && (typeof jti !== "string" || jti.length === 0)) {
+		return null;
+	}
+	if (roles !== undefined && !isStringArray(roles)) return null;
+	if (permissions !== undefined && !isStringArray(permissions)) return null;
+	// Optional claims are carried only when the token has them: an explicit
+	// `undefined` would show up as a key the token never asserted.
+	return {
+		...value,
+		sub,
+		iat,
+		exp,
+		...(jti === undefined ? {} : { jti }),
+		...(roles === undefined ? {} : { roles }),
+		...(permissions === undefined ? {} : { permissions }),
+	};
 }
 
 export interface JwtStrategyConfig {
@@ -201,7 +247,7 @@ export class JwtStrategy implements AuthStrategy {
 			// trust such a token — reject it rather than let an
 			// unrevocable token through. (signToken always sets a jti;
 			// this guards legacy / externally-signed tokens.)
-			if (typeof payload.jti !== "string" || payload.jti.length === 0) {
+			if (payload.jti === undefined) {
 				return { authenticated: false, error: "Token missing jti claim" };
 			}
 			if (await this.#blacklist.isRevoked(payload.jti)) {
@@ -270,7 +316,9 @@ export class JwtStrategy implements AuthStrategy {
 			);
 		}
 		const payload = this.#verifyWithRotation(token);
-		if (!payload) return false;
+		// No jti, nothing to list: verify() refuses such a token anyway once a
+		// blacklist is configured, which revoking requires.
+		if (!payload || payload.jti === undefined) return false;
 		const expMs = payload.exp * 1000;
 		if (expMs <= Date.now()) return false;
 		await this.#blacklist.revoke(payload.jti, expMs);

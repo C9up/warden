@@ -130,9 +130,7 @@ function isSessionGuard(auth: AuthManager, name: string): boolean {
 function hasVerifyWithContext(
 	strategy: AuthStrategy,
 ): strategy is StrategyWithContext {
-	return (
-		typeof (strategy as StrategyWithContext).verifyWithContext === "function"
-	);
+	return typeof Reflect.get(strategy, "verifyWithContext") === "function";
 }
 
 /** The credentials Warden extracts from a request, independent of guard list. */

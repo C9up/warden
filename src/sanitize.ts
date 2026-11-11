@@ -10,8 +10,10 @@ import type { UserPayload } from "./AuthManager.js";
 
 export function sanitizePayload(user: UserPayload): void {
 	for (const key of ["__proto__", "constructor", "prototype"]) {
-		if (key in user) {
-			delete (user as Record<string, unknown>)[key];
+		// Own keys only: `constructor` is always reachable through the
+		// prototype, and deleting an inherited name is a no-op anyway.
+		if (Object.hasOwn(user, key)) {
+			delete user[key];
 		}
 	}
 }

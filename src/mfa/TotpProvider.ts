@@ -149,8 +149,13 @@ export interface TotpEnrollment {
 	uri: string;
 }
 
-const DEFAULTS = {
-	algorithm: "SHA1" as TotpAlgorithm,
+const DEFAULTS: {
+	algorithm: TotpAlgorithm;
+	digits: number;
+	period: number;
+	window: number;
+} = {
+	algorithm: "SHA1",
 	digits: 6,
 	period: 30,
 	window: 1,

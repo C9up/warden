@@ -243,6 +243,55 @@ describe("warden > decorators", () => {
 });
 
 describe("warden > security hardening", () => {
+	// The engine output was parsed and trusted `as JwtClaims`: only `sub` was
+	// checked. A token without `iat` slipped past an app's documented
+	// "iat predates passwordChangedAt" check (undefined < n is false), and a
+	// non-string jti reached the blacklist.
+	it.each([
+		["no iat", { sub: "u1", exp: 0, jti: "j" }],
+		["a string iat", { sub: "u1", iat: "0", exp: 0, jti: "j" }],
+		["a string exp", { sub: "u1", iat: 0, exp: "9999999999", jti: "j" }],
+		["a numeric jti", { sub: "u1", iat: 0, exp: 0, jti: 42 }],
+		["an empty jti", { sub: "u1", iat: 0, exp: 0, jti: "" }],
+		[
+			"roles that are not a string array",
+			{ sub: "u1", iat: 0, exp: 0, roles: "admin" },
+		],
+		[
+			"permissions with a non-string",
+			{ sub: "u1", iat: 0, exp: 0, permissions: ["a", 1] },
+		],
+	])("JwtStrategy refuses a signed token with %s", async (_label, shape) => {
+		const { createHmac } = await import("node:crypto");
+		const secret = "x".repeat(32);
+		const now = Math.floor(Date.now() / 1000);
+		const claims: Record<string, unknown> = { ...shape };
+		// Fill the placeholders with live values, keeping each field's type.
+		if (claims.iat === 0) claims.iat = now;
+		if (claims.exp === 0) claims.exp = now + 3600;
+		const b64u = (o: object) =>
+			Buffer.from(JSON.stringify(o)).toString("base64url");
+		const head = b64u({ alg: "HS256", typ: "JWT" });
+		const body = b64u(claims);
+		const sig = createHmac("sha256", secret)
+			.update(`${head}.${body}`)
+			.digest("base64url");
+		let looked = false;
+		const jwt = new JwtStrategy({
+			secret,
+			findUser: async (id) => {
+				looked = true;
+				return { id };
+			},
+			verifyCredentials: async () => null,
+		});
+
+		const res = await jwt.verify(`${head}.${body}.${sig}`);
+
+		expect(res.authenticated).toBe(false);
+		expect(looked).toBe(false);
+	});
+
 	it("JwtStrategy refuses a validly signed token with no exp", async () => {
 		// The wrapper only parses what the engine returns, so exp being
 		// mandatory is entirely the engine's: a token without one would be

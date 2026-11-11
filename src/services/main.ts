@@ -37,7 +37,10 @@ export function clearAuth(): void {
 	instance = undefined;
 }
 
-const auth: AuthManager = new Proxy({} as AuthManager, {
+// The target is never read through — every trap forwards to `instance`.
+const target: AuthManager = Object.create(null);
+
+const auth: AuthManager = new Proxy(target, {
 	get(_target, prop) {
 		if (!instance) {
 			throw new Error(
