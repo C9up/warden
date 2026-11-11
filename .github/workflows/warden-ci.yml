@@ -227,9 +227,29 @@ jobs:
         with:
           node-version: '24'
       - run: pnpm install
-      - run: pnpm test:integration
+      # The suite throws when REDIS_TEST_URL is set and no server answers; the
+      # gate below also refuses a run where nothing ran or anything skipped, so
+      # this job can never pass the publish gate with zero tests.
+      - run: pnpm test:integration --reporter=default --reporter=json --outputFile=integration-results.json
         env:
           REDIS_TEST_URL: redis://127.0.0.1:6379
+      - name: Integration gate — tests ran AND zero skipped
+        run: |
+          if [ ! -f integration-results.json ]; then
+            echo "::error::integration-results.json not produced — the integration run failed before writing"
+            exit 1
+          fi
+          total=$(jq '[.testResults[].assertionResults[]] | length' integration-results.json)
+          if [ "$total" -eq 0 ]; then
+            echo "::error::0 integration tests ran — check the vitest.integration.config.ts include glob"
+            exit 1
+          fi
+          skipped=$(jq '[.testResults[].assertionResults[] | select(.status=="skipped")] | length' integration-results.json)
+          if [ "$skipped" -ne 0 ]; then
+            echo "::error::$skipped integration tests skipped — the live-Redis suite did not run"
+            exit 1
+          fi
+        shell: bash
 
   # vitest on the host platform, on every push. The matrix above runs the
   # same suite across five targets, but only when the version moves — so

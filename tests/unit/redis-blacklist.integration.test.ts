@@ -8,7 +8,10 @@
  * revoked token revoked, and if the TTL is off a logged-out token quietly
  * becomes valid again.
  *
- * Gated on `REDIS_TEST_URL`; skipped without one.
+ * Gated on `REDIS_TEST_URL`: skipped without one (a developer machine with no
+ * Redis), FAILED when it is set and no server answers. The CI job sets the URL,
+ * so a service that is up for its health check and then refuses the first
+ * command turns the job red instead of into zero tests run.
  */
 import { QuasarManager } from "@c9up/quasar";
 import { clearQuasar, setQuasar } from "@c9up/quasar/services/main";
@@ -19,9 +22,8 @@ import { RedisBlacklistDriver } from "../../src/RedisBlacklistDriver.js";
 const url = process.env.REDIS_TEST_URL ?? "";
 
 /**
- * Skipped, not failed, when no server answers: a URL can be set and point at
- * nothing. Probed through quasar (a devDependency here) rather than ioredis,
- * which warden deliberately does not depend on.
+ * Probed through quasar (a devDependency here) rather than ioredis, which
+ * warden deliberately does not depend on.
  */
 async function serverAnswers(): Promise<boolean> {
 	const probe = new QuasarManager({
@@ -44,6 +46,15 @@ async function serverAnswers(): Promise<boolean> {
 }
 
 const live = url ? await serverAnswers() : false;
+
+// A URL that answers nothing is a broken environment, not a missing one: the
+// suite exists to prove the revocation mechanism against a real server, and a
+// silent skip would let the release gate pass with nothing run.
+if (url && !live) {
+	throw new Error(
+		`REDIS_TEST_URL is set (${url}) but no server answers: refusing to skip the live-Redis suite.`,
+	);
+}
 
 const describeRedis = live ? describe : describe.skip;
 
