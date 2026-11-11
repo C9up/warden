@@ -66,11 +66,17 @@ function cMap(entries: Array<[number | string, Buffer]>): Buffer {
 
 /** A fake authenticator backed by a real EC P-256 keypair. */
 class FakeAuthenticator {
-	readonly credentialId = randomBytes(16);
+	readonly credentialId: Buffer;
 	private readonly privateKey: KeyObject;
 	private readonly coseKey: Buffer;
 
-	constructor() {
+	/**
+	 * @param credentialId Forced credential id. With `attestation: "none"` the
+	 *   authenticator data is attacker-chosen, so an attacker's own key can
+	 *   claim any id it has seen in an `allowCredentials` list.
+	 */
+	constructor(credentialId: Buffer = randomBytes(16)) {
+		this.credentialId = credentialId;
 		const { publicKey, privateKey } = generateKeyPairSync("ec", {
 			namedCurve: "P-256",
 		});
@@ -553,6 +559,127 @@ describe("warden > binding a WebAuthn ceremony to its user", () => {
 		);
 
 		expect(await challenges.take(state)).toBeNull();
+	});
+});
+
+/**
+ * A credential id belongs to the first account that registered it.
+ *
+ * With `attestation: "none"` the authenticator data, and so the credential id,
+ * is whatever the client sends. A victim's ids are handed to anyone who starts
+ * an authentication ceremony for that victim (`allowCredentials`), so an
+ * attacker could register their own key under the victim's id: the store
+ * replaced the row, the victim's passkey became the attacker's, and the real
+ * device was refused at the next sign-in.
+ */
+describe("warden > a WebAuthn credential id cannot be registered twice", () => {
+	const VICTIM = { id: "victim", name: "victim@c9up.com" };
+	const ATTACKER = { id: "attacker", name: "attacker@c9up.com" };
+
+	it("refuses an attacker's key carrying the victim's credential id", async () => {
+		const credentials = new MemoryWebauthnCredentialStore();
+		const p = provider({ credentialStore: credentials });
+		const victim = new FakeAuthenticator();
+		const v = await p.startRegistration(VICTIM);
+		expect(
+			(
+				await p.finishRegistration(
+					v.state,
+					VICTIM.id,
+					victim.register(v.options.challenge),
+				)
+			).verified,
+		).toBe(true);
+
+		// The id the attacker learns from the victim's authentication options.
+		const leaked = (await p.startAuthentication(VICTIM.id)).options
+			.allowCredentials?.[0]?.id;
+		expect(leaked).toBe(b64url(victim.credentialId));
+
+		const forged = new FakeAuthenticator(victim.credentialId);
+		const a = await p.startRegistration(ATTACKER);
+		const res = await p.finishRegistration(
+			a.state,
+			ATTACKER.id,
+			forged.register(a.options.challenge),
+		);
+
+		expect(res.verified).toBe(false);
+		const stored = await credentials.findById(b64url(victim.credentialId));
+		expect(stored?.userId).toBe(VICTIM.id);
+		expect(await credentials.findByUser(VICTIM.id)).toHaveLength(1);
+		expect(await credentials.findByUser(ATTACKER.id)).toHaveLength(0);
+
+		// And the victim's real device still signs in.
+		const auth = await p.startAuthentication(VICTIM.id);
+		const ok = await p.finishAuthentication(
+			auth.state,
+			victim.authenticate(auth.options.challenge, 1),
+		);
+		expect(ok.verified).toBe(true);
+	});
+
+	it("refuses re-registering the same id for the same user", async () => {
+		// Re-registration would reset the signature counter to the attestation's
+		// value, erasing the cloned-authenticator evidence.
+		const p = provider();
+		const auth = new FakeAuthenticator();
+		const first = await p.startRegistration(USER);
+		await p.finishRegistration(
+			first.state,
+			USER.id,
+			auth.register(first.options.challenge),
+		);
+		const again = await p.startRegistration(USER);
+		const res = await p.finishRegistration(
+			again.state,
+			USER.id,
+			auth.register(again.options.challenge),
+		);
+
+		expect(res.verified).toBe(false);
+	});
+
+	it("lets only one of two concurrent registrations of an id win", async () => {
+		const credentials = new MemoryWebauthnCredentialStore();
+		const p = provider({ credentialStore: credentials });
+		const shared = randomBytes(16);
+		const one = new FakeAuthenticator(shared);
+		const two = new FakeAuthenticator(shared);
+		const s1 = await p.startRegistration(VICTIM);
+		const s2 = await p.startRegistration(ATTACKER);
+
+		const results = await Promise.all([
+			p.finishRegistration(
+				s1.state,
+				VICTIM.id,
+				one.register(s1.options.challenge),
+			),
+			p.finishRegistration(
+				s2.state,
+				ATTACKER.id,
+				two.register(s2.options.challenge),
+			),
+		]);
+
+		expect(results.filter((r) => r.verified)).toHaveLength(1);
+	});
+
+	it("the in-memory store inserts, it never replaces", async () => {
+		const credentials = new MemoryWebauthnCredentialStore();
+		const row = {
+			id: "cred",
+			userId: VICTIM.id,
+			publicKey: "pk",
+			alg: -7,
+			counter: 0,
+		};
+		await credentials.save(row);
+
+		await expect(
+			credentials.save({ ...row, userId: ATTACKER.id }),
+		).rejects.toMatchObject({ code: "E_WARDEN_WEBAUTHN_CREDENTIAL_EXISTS" });
+		expect((await credentials.findById("cred"))?.userId).toBe(VICTIM.id);
 	});
 });
 

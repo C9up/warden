@@ -117,6 +117,24 @@ export interface WebauthnChallengeStore {
 	take(state: string): Promise<WebauthnCeremony | null>;
 }
 
+/**
+ * Thrown by `WebauthnCredentialStore.save` when the credential id is already
+ * registered. `finishRegistration` turns it into `{ verified: false }`; any
+ * other error from the store is an outage and propagates.
+ */
+export class WebauthnCredentialExistsError extends WardenError {
+	constructor(credentialId: string) {
+		super(
+			"E_WARDEN_WEBAUTHN_CREDENTIAL_EXISTS",
+			`The WebAuthn credential "${credentialId}" is already registered.`,
+			{
+				hint: "A credential id belongs to the account that registered it first. Keep it unique in the store (INSERT, never upsert).",
+			},
+		);
+		this.name = "WebauthnCredentialExistsError";
+	}
+}
+
 /** A registered passkey, persisted between ceremonies. */
 export interface StoredPasskey {
 	/** Base64URL credential id. */
@@ -131,6 +149,19 @@ export interface StoredPasskey {
 }
 
 export interface WebauthnCredentialStore {
+	/**
+	 * Persist a NEW passkey. This is an INSERT, never an upsert.
+	 *
+	 * The credential id comes from authenticator data the client chose
+	 * (attestation is `none`), and a victim's ids are listed to anyone who
+	 * starts an authentication ceremony for them. A store that replaced an
+	 * existing row let an attacker register their own key under the victim's
+	 * id and take the passkey over. `finishRegistration` checks `findById`
+	 * first; the store closes the race between that check and this write: a
+	 * persistent store keeps `id` unique (primary key / unique index, Redis
+	 * `SET … NX`) and throws `WebauthnCredentialExistsError` when the id is
+	 * already taken, so a concurrent registration of the same id fails.
+	 */
 	save(passkey: StoredPasskey): Promise<void>;
 	findById(id: string): Promise<StoredPasskey | null>;
 	findByUser(userId: string): Promise<StoredPasskey[]>;
@@ -277,6 +308,11 @@ export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
 export class MemoryWebauthnCredentialStore implements WebauthnCredentialStore {
 	#store = new Map<string, StoredPasskey>();
 	async save(passkey: StoredPasskey): Promise<void> {
+		// Check and write with no `await` between them: atomic on a
+		// single-threaded runtime, so two registrations of one id cannot both land.
+		if (this.#store.has(passkey.id)) {
+			throw new WebauthnCredentialExistsError(passkey.id);
+		}
 		this.#store.set(passkey.id, passkey);
 	}
 	async findById(id: string): Promise<StoredPasskey | null> {
@@ -494,14 +530,31 @@ export class WebauthnProvider {
 		if (parsed === null || !this.#algorithms.includes(parsed.alg)) {
 			return { verified: false };
 		}
-		await this.#credentials.save({
-			id: bufferToBase64url(parsed.credentialId),
-			userId,
-			publicKey: bufferToBase64url(parsed.publicKeyBytes),
-			alg: parsed.alg,
-			counter: parsed.signCount,
-			transports: response.response.transports,
-		});
+		// WebAuthn L2 7.1 step 22: a credential id already registered, for ANY
+		// user, fails the ceremony. The id is client-chosen; replacing the row
+		// handed the victim's passkey to whoever sent it, and re-registering
+		// one's own id reset the counter that betrays a cloned authenticator.
+		const id = bufferToBase64url(parsed.credentialId);
+		if ((await this.#credentials.findById(id)) !== null) {
+			return { verified: false };
+		}
+		try {
+			await this.#credentials.save({
+				id,
+				userId,
+				publicKey: bufferToBase64url(parsed.publicKeyBytes),
+				alg: parsed.alg,
+				counter: parsed.signCount,
+				transports: response.response.transports,
+			});
+		} catch (error) {
+			// A concurrent registration took the id between the check and the
+			// insert. Any other store failure is infrastructure and propagates.
+			if (error instanceof WebauthnCredentialExistsError) {
+				return { verified: false };
+			}
+			throw error;
+		}
 		return { verified: true };
 	}
 

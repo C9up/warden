@@ -152,6 +152,7 @@ export type {
 export {
 	MemoryWebauthnChallengeStore,
 	MemoryWebauthnCredentialStore,
+	WebauthnCredentialExistsError,
 	WebauthnProvider,
 } from "./mfa/WebauthnProvider.js";
 export { quasarConnection } from "./quasar.js";
