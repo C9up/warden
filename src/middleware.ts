@@ -189,10 +189,11 @@ export interface WardenContext {
 			permissions: readonly string[],
 			scope?: Scope,
 		): Promise<boolean>;
-		authenticate?(): Promise<void>;
+		/** Resolves to the user (warden's Authenticator); a host's may resolve to nothing. */
+		authenticate?(): Promise<unknown>;
 		check?(): Promise<boolean>;
 		getUserOrFail?(): { id: string; [key: string]: unknown } | undefined;
-		use?(name: string): unknown;
+		use?(name?: string): unknown;
 		readonly authenticationAttempted?: boolean;
 	};
 	/**

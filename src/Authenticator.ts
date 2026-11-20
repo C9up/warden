@@ -15,6 +15,12 @@
  */
 
 import type {
+	AccessToken,
+	CreateAccessTokenOptions,
+	TokenOwner,
+} from "./AccessToken.js";
+import type {
+	AuthClientResponse,
 	AuthManager,
 	AuthResult,
 	AuthStrategy,
@@ -134,6 +140,51 @@ function hasVerifyWithContext(
 	return typeof Reflect.get(strategy, "verifyWithContext") === "function";
 }
 
+/**
+ * A guard that mints and revokes access tokens (`ApiKeyStrategy`, or one an
+ * application wrote with the same two members).
+ */
+interface AccessTokenIssuer {
+	createToken(
+		user: TokenOwner,
+		abilities?: string[],
+		options?: CreateAccessTokenOptions,
+	): Promise<AccessToken>;
+	invalidateToken(value: string): Promise<boolean>;
+}
+
+function isAccessTokenIssuer(
+	strategy: AuthStrategy,
+): strategy is AuthStrategy & AccessTokenIssuer {
+	return (
+		typeof Reflect.get(strategy, "createToken") === "function" &&
+		typeof Reflect.get(strategy, "invalidateToken") === "function"
+	);
+}
+
+/**
+ * What a test seam hands back is the strategy's own business; this only checks
+ * it is the object the harness reads fields from.
+ */
+function isAuthClientResponse(value: unknown): value is AuthClientResponse {
+	return typeof value === "object" && value !== null;
+}
+
+/**
+ * The credential a token guard reads from a request: the API-key header first
+ * for an API-key guard name, the Bearer token first for any other — the same
+ * pick {@link tryAuthenticate} makes, so the token revoked is the one that
+ * authenticated.
+ */
+function tokenCredentialFor(
+	strategyName: string,
+	creds: ExtractedCredentials,
+): string {
+	return API_KEY_GUARD_NAMES.includes(strategyName)
+		? creds.apiKey || creds.bearerToken
+		: creds.bearerToken || creds.apiKey;
+}
+
 /** The credentials Warden extracts from a request, independent of guard list. */
 export interface ExtractedCredentials {
 	bearerToken: string;
@@ -215,7 +266,7 @@ async function tryAuthenticate(
 	strategies: string[],
 	creds: ExtractedCredentials,
 ): Promise<AuthAttempt> {
-	const { bearerToken, apiKey, basicAuth, session } = creds;
+	const { basicAuth, session } = creds;
 	let result: AuthResult | null = null;
 	let viaGuard: string | undefined;
 	let attemptCount = 0;
@@ -249,9 +300,7 @@ async function tryAuthenticate(
 				// Native-first credential, other transport as fallback so a
 				// single-credential client still authenticates (and an invalid
 				// Bearer no longer masks a valid API key for the api-key guard).
-				const credential = API_KEY_GUARD_NAMES.includes(strategyName)
-					? apiKey || bearerToken
-					: bearerToken || apiKey;
+				const credential = tokenCredentialFor(strategyName, creds);
 				if (!credential) continue;
 				attemptCount++;
 				r = await auth.verify(credential, strategyName);
@@ -319,6 +368,114 @@ export class GuardAccessor {
 		return this.user !== undefined;
 	}
 
+	/** Whether this guard was tried during the request (AdonisJS guard parity). */
+	get authenticationAttempted(): boolean {
+		return this.#parent.attemptedVia(this.#name);
+	}
+
+	/**
+	 * The user, or `E_UNAUTHORIZED_ACCESS` when this guard did not authenticate
+	 * the request (AdonisJS `guard.getUserOrFail()`).
+	 */
+	getUserOrFail(): UserPayload {
+		const user = this.user;
+		if (user === undefined) {
+			throw new E_UNAUTHORIZED_ACCESS("Unauthorized access", {
+				guardDriverName: this.#name,
+			});
+		}
+		return user;
+	}
+
+	/**
+	 * Authenticate through this guard and say whether it worked, without
+	 * throwing on a credential rejection (AdonisJS `guard.check()`). A crashed
+	 * strategy still throws: an outage is not a guest.
+	 */
+	async check(): Promise<boolean> {
+		try {
+			await this.authenticate();
+			return true;
+		} catch (err) {
+			if (err instanceof E_UNAUTHORIZED_ACCESS) return false;
+			throw err;
+		}
+	}
+
+	/**
+	 * What a test client sends to be a user through this guard (AdonisJS
+	 * `guard.authenticateAsClient`). The arguments are the strategy's own: a
+	 * user for a session guard, a user plus abilities for a token guard.
+	 */
+	async authenticateAsClient(...args: unknown[]): Promise<AuthClientResponse> {
+		const strategy = this.#auth.getStrategy(this.#name);
+		const seam: unknown = Reflect.get(strategy, "authenticateAsClient");
+		if (typeof seam !== "function") {
+			throw new WardenError(
+				"STRATEGY_HAS_NO_CLIENT",
+				`Auth strategy '${this.#name}' has no authenticateAsClient() — it cannot forge a client request.`,
+				{
+					hint: "Implement authenticateAsClient() on the strategy, or authenticate through a real login in the test.",
+				},
+			);
+		}
+		const response: unknown = await Reflect.apply(seam, strategy, args);
+		if (!isAuthClientResponse(response)) {
+			throw new WardenError(
+				"STRATEGY_HAS_NO_CLIENT",
+				`Auth strategy '${this.#name}' answered authenticateAsClient() with no client response.`,
+			);
+		}
+		return response;
+	}
+
+	/**
+	 * Mint an access token for `user` through this guard (AdonisJS
+	 * `auth.use('api').createToken(user, abilities, options)`). The returned
+	 * token carries its `value` this once: hand it to the client now.
+	 */
+	async createToken(
+		user: TokenOwner,
+		abilities?: string[],
+		options?: CreateAccessTokenOptions,
+	): Promise<AccessToken> {
+		return this.#tokenIssuer().createToken(user, abilities, options);
+	}
+
+	/**
+	 * Revoke the access token this request came in with (AdonisJS
+	 * `auth.use('api').invalidateToken()`) — the sign-out of a token client.
+	 * Answers whether it existed; `E_UNAUTHORIZED_ACCESS` when the request
+	 * carries no token, as upstream.
+	 */
+	async invalidateToken(): Promise<boolean> {
+		const issuer = this.#tokenIssuer();
+		const value = tokenCredentialFor(
+			this.#name,
+			extractCredentials(this.#ctx, this.#auth),
+		);
+		if (!value) {
+			throw new E_UNAUTHORIZED_ACCESS("Unauthorized access", {
+				guardDriverName: this.#name,
+			});
+		}
+		return issuer.invalidateToken(value);
+	}
+
+	#tokenIssuer(): AccessTokenIssuer {
+		const strategy = this.#auth.getStrategy(this.#name);
+		if (!isAccessTokenIssuer(strategy)) {
+			throw new WardenError(
+				"STRATEGY_CANNOT_ISSUE",
+				`Guard '${this.#name}' does not issue access tokens.`,
+				{
+					hint: "createToken()/invalidateToken() belong to an access-tokens guard (apiKeyGuard). A JWT guard signs with auth.issueFor(user, guard).",
+				},
+			);
+		}
+		return strategy;
+	}
+
 	/**
 	 * Whether the user was revived from a remember-me cookie rather than
 	 * signing in.
@@ -363,8 +520,11 @@ export class GuardAccessor {
 		);
 	}
 
-	/** Authenticate the request using only this guard (throws on failure). */
-	authenticate(): Promise<void> {
+	/**
+	 * Authenticate the request using only this guard, resolving to the user
+	 * (throws `E_UNAUTHORIZED_ACCESS` on failure).
+	 */
+	authenticate(): Promise<UserPayload> {
 		return this.#parent.authenticateUsing([this.#name]);
 	}
 
@@ -615,6 +775,8 @@ export class Authenticator {
 	#user?: UserPayload;
 	#viaGuard?: string;
 	#attempted = false;
+	/** Every guard tried during this request, for `use(name).authenticationAttempted`. */
+	readonly #attemptedGuards = new Set<string>();
 	readonly #guardCache = new Map<string, GuardAccessor>();
 
 	constructor(ctx: WardenContext, auth: AuthManager) {
@@ -640,6 +802,16 @@ export class Authenticator {
 	/** Name of the guard that authenticated the request, if any. */
 	get authenticatedViaGuard(): string | undefined {
 		return this.#viaGuard;
+	}
+
+	/** The guard used when none is named (AdonisJS `auth.defaultGuard`). */
+	get defaultGuard(): string {
+		return this.#auth.defaultStrategyName;
+	}
+
+	/** @internal Whether `name` was tried during this request. */
+	attemptedVia(name: string): boolean {
+		return this.#attemptedGuards.has(name);
 	}
 
 	/**
@@ -689,8 +861,12 @@ export class Authenticator {
 		return this.#auth.hasAllPermissions(this.#user, permissions, scope);
 	}
 
-	/** Authenticate via the default guard. Throws `E_UNAUTHORIZED_ACCESS` on failure. */
-	authenticate(): Promise<void> {
+	/**
+	 * Authenticate via the default guard and resolve to the user (AdonisJS
+	 * `const user = await auth.authenticate()`). Throws `E_UNAUTHORIZED_ACCESS`
+	 * on failure.
+	 */
+	authenticate(): Promise<UserPayload> {
 		return this.authenticateUsing([this.#auth.defaultStrategyName]);
 	}
 
@@ -743,7 +919,7 @@ export class Authenticator {
 	async authenticateUsing(
 		guards?: string[],
 		options?: { loginRoute?: string },
-	): Promise<void> {
+	): Promise<UserPayload> {
 		this.#attempted = true;
 		const names =
 			guards && guards.length > 0 ? guards : [this.#auth.defaultStrategyName];
@@ -766,6 +942,11 @@ export class Authenticator {
 		const { attemptCount, crashCount } = attempt;
 		let result = attempt.result;
 		let viaGuard = attempt.viaGuard;
+		// The guards tried, in order, up to the one that answered.
+		for (const name of names) {
+			this.#attemptedGuards.add(name);
+			if (name === viaGuard) break;
+		}
 
 		// No credential answered, but the browser may still hold a remember-me
 		// cookie — that is what "keep me signed in" means, and nothing read it.
@@ -790,7 +971,7 @@ export class Authenticator {
 				`${this.#auth.eventPrefixFor(winner)}:authentication_succeeded`,
 				{ guardName: winner, user: result.user, sessionId: undefined },
 			);
-			return;
+			return result.user;
 		}
 		// Every attempted guard crashed → a server-side incident, not a
 		// credential rejection. Surface distinctly (mapped to 500 by the caller).
@@ -833,8 +1014,11 @@ export class Authenticator {
 		return this.#user;
 	}
 
-	/** Access a named guard (AdonisJS `auth.use('web')`). Instances are cached per request. */
-	use(name: string): GuardAccessor {
+	/**
+	 * Access a named guard (AdonisJS `auth.use('web')`); the default guard when
+	 * no name is given. Instances are cached per request.
+	 */
+	use(name: string = this.#auth.defaultStrategyName): GuardAccessor {
 		let accessor = this.#guardCache.get(name);
 		if (!accessor) {
 			accessor = new GuardAccessor(this.#ctx, this.#auth, name, this);
@@ -850,6 +1034,7 @@ export class Authenticator {
 	 */
 	adopt(result: AuthResult | null, viaGuard: string | undefined): void {
 		this.#attempted = true;
+		if (viaGuard !== undefined) this.#attemptedGuards.add(viaGuard);
 		if (result?.authenticated && result.user) {
 			this.#user = result.user;
 			this.#viaGuard = viaGuard;

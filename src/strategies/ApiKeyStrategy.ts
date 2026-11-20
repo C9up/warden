@@ -111,10 +111,11 @@ export class ApiKeyStrategy implements AuthStrategy {
 	/**
 	 * Revoke the token behind `value`. Answers whether it existed.
 	 *
-	 * NAMED DEVIATION — upstream's guard is built per request and revokes the
-	 * token it authenticated with, so it takes no argument. A warden strategy
-	 * is shared by every request and keeps none of them, so the value is passed
-	 * in; a sign-out handler has it, it is the request's credential.
+	 * Upstream's guard is built per request and revokes the token it
+	 * authenticated with, so it takes no argument: that shape is the request's
+	 * guard, `ctx.auth.use('api').invalidateToken()`. A warden strategy is
+	 * shared by every request and keeps none of them, so here the value is
+	 * passed in.
 	 */
 	invalidateToken(value: string): Promise<boolean> {
 		return this.#config.tokens.invalidate(new Secret(value));
