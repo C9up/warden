@@ -9,6 +9,7 @@
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { WardenError } from "../errors.js";
+import { hasEnded } from "../vendor/quasarConnection.js";
 import { base32Decode, base32Encode } from "./base32.js";
 
 export type TotpAlgorithm = "SHA1" | "SHA256" | "SHA512";
@@ -124,6 +125,13 @@ export class RedisTotpReplayGuard implements TotpReplayGuard {
 	}
 
 	async claim(key: string, ttlMs: number): Promise<boolean> {
+		// Resolved again once the client has ended for good: quasar retires
+		// a connection whose retry strategy gave up and hands out a fresh one,
+		// and keeping the dead client refused every code until restart. A
+		// client handed in directly is kept whatever its state.
+		if (typeof this.#source === "function" && hasEnded(this.#resolved)) {
+			this.#resolved = undefined;
+		}
 		if (this.#resolved === undefined) {
 			this.#resolved =
 				typeof this.#source === "function"

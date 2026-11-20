@@ -11,6 +11,8 @@
  * so a lockout holds whichever instance the next attempt lands on.
  */
 
+import { hasEnded } from "./vendor/quasarConnection.js";
+
 /** A window of attempts counted under one key. */
 export interface AttemptCount {
 	/**
@@ -135,7 +137,18 @@ export class RedisAttemptStore implements AttemptStore {
 		this.#prefix = options.prefix ?? "warden:attempts";
 	}
 
+	/**
+	 * The client, resolved on first use and again once it has ended for good:
+	 * quasar retires a connection whose retry strategy gave up and hands out a
+	 * fresh one, and keeping the dead client failed every call with "Connection
+	 * is closed." until restart. NAMED DEVIATION, better than upstream, whose
+	 * Redis stores capture `ioConnection` once. A client handed in directly is
+	 * kept whatever its state.
+	 */
 	async #client(): Promise<AttemptRedisClient> {
+		if (typeof this.#source === "function" && hasEnded(this.#resolved)) {
+			this.#resolved = undefined;
+		}
 		if (this.#resolved) return this.#resolved;
 		this.#resolved =
 			typeof this.#source === "function" ? await this.#source() : this.#source;

@@ -9,6 +9,7 @@
  */
 
 import type { BlacklistDriver } from "./TokenBlacklist.js";
+import { hasEnded } from "./vendor/quasarConnection.js";
 
 /** The minimal ioredis-shaped surface this driver needs. */
 export interface RedisLikeClient {
@@ -49,8 +50,18 @@ export class RedisBlacklistDriver implements BlacklistDriver {
 	/**
 	 * The client, resolved once. Two requests racing on a cold start must not
 	 * each open their own connection, so the in-flight promise is shared.
+	 *
+	 * Resolved AGAIN once the client it holds has ended for good: quasar
+	 * retires a connection whose retry strategy gave up and hands out a fresh
+	 * one, and keeping the dead client failed every revocation check with
+	 * "Connection is closed." until restart. NAMED DEVIATION, better than
+	 * upstream, whose Redis stores capture `ioConnection` once. A client handed
+	 * in directly is kept whatever its state.
 	 */
 	async #client(): Promise<RedisLikeClient> {
+		if (typeof this.#source === "function" && hasEnded(this.#resolved)) {
+			this.#resolved = undefined;
+		}
 		if (this.#resolved) return this.#resolved;
 		if (typeof this.#source !== "function") {
 			this.#resolved = this.#source;
