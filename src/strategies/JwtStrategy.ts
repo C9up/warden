@@ -10,6 +10,7 @@ import type {
 	AuthStrategy,
 	UserPayload,
 } from "../AuthManager.js";
+import { rejectedAsNull } from "../authFinder.js";
 import { resolveExpiresInSeconds, type TokenDuration } from "../duration.js";
 import { nativeWarden, nativeWardenLoadError } from "../native.js";
 import type { TokenBlacklist } from "../TokenBlacklist.js";
@@ -222,7 +223,7 @@ export class JwtStrategy implements AuthStrategy {
 			return { authenticated: false, error: "Email and password are required" };
 		}
 
-		const user = await this.#verifyCredentials(email, password);
+		const user = await rejectedAsNull(this.#verifyCredentials(email, password));
 		if (!user) {
 			return { authenticated: false, error: "Invalid credentials" };
 		}

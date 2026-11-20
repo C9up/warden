@@ -12,6 +12,9 @@ export default defineConfig({
       expiresIn: process.env.JWT_EXPIRY ?? 3600,
       // TODO: wire these to your user model (e.g. via your ORM).
       // The JWT guard needs both to issue and verify tokens.
+      // For verifyCredentials, build on authFinder({ hash, findForAuth }) from
+      // '@c9up/warden': it pays a hash for an unknown email too, so the login
+      // response time does not reveal which accounts exist.
       findUser: async (_id) => {
         throw new Error('TODO: implement findUser(id) for the JWT guard in config/auth.ts')
       },

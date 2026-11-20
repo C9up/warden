@@ -15,6 +15,7 @@ import type {
 	AuthStrategy,
 	UserPayload,
 } from "../AuthManager.js";
+import { rejectedAsNull } from "../authFinder.js";
 
 export interface BasicAuthConfig {
 	/**
@@ -86,7 +87,9 @@ export class BasicAuthStrategy implements AuthStrategy {
 		if (typeof uid !== "string" || typeof password !== "string") {
 			return { authenticated: false, error: "Invalid credentials" };
 		}
-		const user = await this.#config.verifyCredentials(uid, password);
+		const user = await rejectedAsNull(
+			this.#config.verifyCredentials(uid, password),
+		);
 		// One message for an unknown user and for a wrong password: telling them
 		// apart turns the endpoint into a username oracle.
 		if (!user) return { authenticated: false, error: "Invalid credentials" };

@@ -54,6 +54,12 @@ export type {
 	AuthRateLimiterConfig,
 } from "./AuthRateLimiter.js";
 export { AuthRateLimiter } from "./AuthRateLimiter.js";
+export type {
+	AuthFinder,
+	AuthFinderHasher,
+	AuthFinderOptions,
+} from "./authFinder.js";
+export { authFinder } from "./authFinder.js";
 export { AbilitiesBuilder } from "./bouncer/AbilitiesBuilder.js";
 export { AuthorizationResponse } from "./bouncer/AuthorizationResponse.js";
 export { BasePolicy } from "./bouncer/BasePolicy.js";
