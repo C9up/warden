@@ -8,7 +8,10 @@ import { Authenticator } from "./Authenticator.js";
 import { WardenError } from "./errors.js";
 import type { WardenContext } from "./middleware.js";
 import { MemoryRightsStore } from "./rights/MemoryRightsStore.js";
-import { RightsResolver } from "./rights/RightsResolver.js";
+import {
+	narrowToAccessToken,
+	RightsResolver,
+} from "./rights/RightsResolver.js";
 import type { EffectivePermissions, Scope } from "./rights/types.js";
 import { sanitizePayload } from "./sanitize.js";
 import type {
@@ -351,12 +354,15 @@ export class AuthManager {
 	 * Bouncer policy path (`this.permissions`, 56.3) consults the SAME resolver,
 	 * so a coarse question and a policy question return the same answer for the
 	 * same `(user, scope)` (the single unification point — AC-E3).
+	 *
+	 * Narrowed by the access token the user came in with, if any
+	 * ({@link narrowToAccessToken}): the set is what THIS request may do.
 	 */
-	resolvePermissions(
+	async resolvePermissions(
 		user: UserPayload,
 		scope: Scope = "global",
 	): Promise<EffectivePermissions> {
-		return this.#rights.resolve(user, scope);
+		return narrowToAccessToken(await this.#rights.resolve(user, scope), user);
 	}
 
 	/**

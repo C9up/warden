@@ -13,7 +13,10 @@
 
 import type { UserPayload } from "../AuthManager.js";
 import { WardenError } from "../errors.js";
-import type { RightsResolver } from "../rights/RightsResolver.js";
+import {
+	narrowToAccessToken,
+	type RightsResolver,
+} from "../rights/RightsResolver.js";
 import type { EffectivePermissions, Scope } from "../rights/types.js";
 import { AbilitiesBuilder } from "./AbilitiesBuilder.js";
 import { AuthorizationResponse } from "./AuthorizationResponse.js";
@@ -133,9 +136,14 @@ export class Bouncer {
 	#resolvePermissions(): Promise<EffectivePermissions> {
 		if (this.#resolved === undefined) {
 			const user = this.#getUser();
+			// Narrowed by the request's access token, exactly as the coarse
+			// `hasPermission` is: a token minted for `orders:read` must not pass
+			// a policy that asks `this.permissions.has('orders:delete')`.
 			this.#resolved =
 				this.#resolver !== undefined && user !== null
-					? this.#resolver.resolve(user, this.#scope)
+					? this.#resolver
+							.resolve(user, this.#scope)
+							.then((effective) => narrowToAccessToken(effective, user))
 					: Promise.resolve(emptyPermissions(this.#scope));
 		}
 		return this.#resolved;

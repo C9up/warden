@@ -43,6 +43,33 @@ class ResolvedPermissions implements EffectivePermissions {
 	}
 }
 
+/**
+ * `effective` as the REQUEST may use it: when the user came in with an access
+ * token, every permission must also be allowed by that token.
+ *
+ * The one place the intersection happens for a resolved set, so the coarse
+ * helpers (`AuthManager.hasPermission`, the decorator gate) and a policy's
+ * `this.permissions` cannot answer differently for the same request. Roles stay
+ * the user's: a token restricts what may be DONE, not who the user is.
+ */
+export function narrowToAccessToken(
+	effective: EffectivePermissions,
+	user: UserPayload,
+): EffectivePermissions {
+	const token = user.currentAccessToken;
+	if (token === undefined) return effective;
+	const allowed = (permission: string): boolean =>
+		effective.has(permission) && token.allows(permission);
+	return {
+		has: allowed,
+		hasAll: (permissions) => permissions.every(allowed),
+		hasAny: (permissions) => permissions.some(allowed),
+		permissions: new Set([...effective.permissions].filter(allowed)),
+		roles: effective.roles,
+		scope: effective.scope,
+	};
+}
+
 export class RightsResolver {
 	constructor(private readonly store: RightsStore) {}
 
