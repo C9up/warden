@@ -392,10 +392,14 @@ export class GuardAccessor {
 			this.#state,
 		);
 		if (!revived) return undefined;
+		// A revival is never a step-up, whichever guard performed it: a guard
+		// the application wrote itself may hand back its row untouched, and an
+		// "MFA enabled" column on it must not satisfy `@RequireMfa()`.
+		const user: UserPayload = { ...revived.user, mfa: false };
 		// Same guard as every other path into `ctx.auth.user`, and BEFORE the
 		// session is seated with it: `findUser` may hand back a JSON-decoded
 		// row carrying an own `__proto__` / `constructor` key.
-		sanitizePayload(revived.user);
+		sanitizePayload(user);
 
 		write.call(
 			this.#ctx.response,
@@ -407,8 +411,8 @@ export class GuardAccessor {
 		// typed, and it clears `viaRemember` — the one thing this path exists to
 		// report, and what an app checks before letting someone change an email
 		// or spend money.
-		strategy.seatSession(revived.user, session);
-		return revived.user;
+		strategy.seatSession(user, session);
+		return user;
 	}
 
 	/**

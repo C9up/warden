@@ -154,9 +154,13 @@ export class ApiKeyStrategy implements AuthStrategy {
 		}
 		// A copy: the provider's object is the application's, and attaching the
 		// token to it would leak one request's token into the next.
+		//
+		// `mfa` is the step-up of THIS credential, and an access token carries
+		// none: whatever `findUser` said (an "MFA enabled" column, typically)
+		// must not satisfy `@RequireMfa()`.
 		return {
 			authenticated: true,
-			user: { ...user, currentAccessToken: accessToken },
+			user: { ...user, currentAccessToken: accessToken, mfa: false },
 		};
 	}
 }

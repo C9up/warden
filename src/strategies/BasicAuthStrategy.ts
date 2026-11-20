@@ -93,7 +93,9 @@ export class BasicAuthStrategy implements AuthStrategy {
 		// One message for an unknown user and for a wrong password: telling them
 		// apart turns the endpoint into a username oracle.
 		if (!user) return { authenticated: false, error: "Invalid credentials" };
-		return { authenticated: true, user };
+		// A password is not a step-up: whatever the application's user carries
+		// under `mfa` (an "MFA enabled" column) must not satisfy `@RequireMfa()`.
+		return { authenticated: true, user: { ...user, mfa: false } };
 	}
 
 	/** Authenticate from the raw `Authorization` header value. */

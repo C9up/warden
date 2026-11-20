@@ -256,7 +256,10 @@ export class SessionStrategy implements AuthStrategy {
 		if (!user) return null;
 
 		if (state) state.viaRemember = true;
-		return { user, cookieValue: recycled.value };
+		// A revived session has not stepped up (seatSession forgets the marker
+		// too): `findUser`'s own `mfa` field must not satisfy `@RequireMfa()`
+		// on the request the cookie was replayed on.
+		return { user: { ...user, mfa: false }, cookieValue: recycled.value };
 	}
 
 	/**
