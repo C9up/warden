@@ -5,7 +5,11 @@
  * concurrent burst, the bounded memory store and the refused configurations.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MemoryAttemptStore } from "../../src/AttemptStore.js";
+import {
+	type AttemptCount,
+	type AttemptStore,
+	MemoryAttemptStore,
+} from "../../src/AttemptStore.js";
 import { AuthRateLimiter } from "../../src/AuthRateLimiter.js";
 
 afterEach(() => {
@@ -97,6 +101,72 @@ describe("warden > AuthRateLimiter", () => {
 				/must be a positive whole number/,
 			);
 		}
+	});
+});
+
+/** A memory store that also remembers every key it was asked to count. */
+class RecordingStore implements AttemptStore {
+	readonly #inner = new MemoryAttemptStore();
+	readonly keys = new Set<string>();
+
+	increment(key: string, windowSeconds: number): Promise<AttemptCount> {
+		this.keys.add(key);
+		return this.#inner.increment(key, windowSeconds);
+	}
+
+	count(key: string): Promise<number> {
+		return this.#inner.count(key);
+	}
+
+	reset(key: string): Promise<void> {
+		return this.#inner.reset(key);
+	}
+}
+
+describe("warden > AuthRateLimiter > a throttled client cannot grow the store", () => {
+	it("stops at the first refused key, so a throttled IP mints no identifier keys", async () => {
+		const store = new RecordingStore();
+		const rl = new AuthRateLimiter({ maxAttempts: 5, store });
+		for (let i = 0; i < 2000; i++) {
+			await rl.attempt(...login("203.0.113.9", `user${i}@x.test`));
+		}
+		// One IP key, and only the identifiers tried while the IP had budget.
+		expect(store.keys.size).toBe(1 + 5);
+	});
+
+	it("leaves a full memory store's room to other clients", async () => {
+		const limiter = new AuthRateLimiter({
+			store: new MemoryAttemptStore({ maxKeys: 1000 }),
+		});
+		for (let i = 0; i < 2000; i++) {
+			await limiter.attempt(...login("203.0.113.9", `user${i}@x.test`));
+		}
+		const decision = await limiter.attempt(
+			...login("198.51.100.1", "admin@corp.test"),
+		);
+		expect(decision.allowed).toBe(true);
+	});
+
+	it("does not count the keys after the refused one", async () => {
+		const rl = new AuthRateLimiter({ maxAttempts: 1 });
+		await rl.attempt(...login("1.1.1.1", "a@b.com"));
+		const refused = await rl.attempt(...login("1.1.1.1", "b@b.com"));
+		expect(refused).toMatchObject({ allowed: false, remaining: 0 });
+		expect(refused.retryAfterSeconds).toBeGreaterThan(0);
+		// b@b.com was never counted: from a fresh IP it still has its attempt.
+		expect((await rl.attempt(...login("2.2.2.2", "b@b.com"))).allowed).toBe(
+			true,
+		);
+	});
+
+	it("keys an identifier by a fixed-size digest, whatever its length", () => {
+		const huge = `${"a".repeat(1_000_000)}@x.io`;
+		const [ip, id] = login("203.0.113.9", huge);
+		expect(ip).toBe("ip:203.0.113.9");
+		// Asserted as booleans: a failure must not print a 1 MB key.
+		expect(/^id:[A-Za-z0-9_-]{43}$/.test(id ?? "")).toBe(true);
+		expect(login("1.1.1.1", `  ${huge.toUpperCase()} `)[1] === id).toBe(true);
+		expect(login("1.1.1.1", "b@x.io")[1] === id).toBe(false);
 	});
 });
 

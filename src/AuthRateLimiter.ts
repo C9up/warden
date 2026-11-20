@@ -19,6 +19,7 @@
  * @implements MISS-26
  */
 
+import { createHash } from "node:crypto";
 import { type AttemptStore, MemoryAttemptStore } from "./AttemptStore.js";
 import { WardenError } from "./errors.js";
 
@@ -59,22 +60,37 @@ export class AuthRateLimiter {
 		this.#store = config.store ?? new MemoryAttemptStore();
 	}
 
-	/** The keys a login attempt is counted under: its IP and its identifier. */
+	/**
+	 * The keys a login attempt is counted under: its IP first, then its
+	 * identifier. The identifier is keyed by the SHA-256 of its normalized form
+	 * (trimmed, lowercased): it is whatever the client posted, and kept
+	 * verbatim a 1 MB body pinned 1 MB in the store for the whole window.
+	 */
 	static loginKeys(ip: string, identifier: string): string[] {
-		return [`ip:${ip.trim()}`, `id:${identifier.trim().toLowerCase()}`];
+		const digest = createHash("sha256")
+			.update(identifier.trim().toLowerCase())
+			.digest("base64url");
+		return [`ip:${ip.trim()}`, `id:${digest}`];
 	}
 
 	/**
-	 * Count an attempt under every key, and say whether it may go on. Call it
-	 * BEFORE checking the credential; a refused attempt must not reach it.
+	 * Count an attempt under its keys, in order, and say whether it may go on.
+	 * Call it BEFORE checking the credential; a refused attempt must not reach
+	 * it.
+	 *
+	 * The first key over the limit refuses the attempt and the keys after it
+	 * are not counted. Counting them all let an IP already throttled create
+	 * one `id:` window per request: a client cycling identifiers filled the
+	 * memory store, whose bound then refused every other client's new keys.
+	 * Stopped at the spent `ip:` key, one address touches at most
+	 * `maxAttempts` identifiers per window.
 	 */
 	async attempt(...keys: string[]): Promise<AttemptDecision> {
-		const counts = await Promise.all(
-			keys.map((key) => this.#store.increment(key, this.#windowSeconds)),
-		);
 		let highest = { count: 0, resetSeconds: 0 };
-		for (const counted of counts) {
+		for (const key of keys) {
+			const counted = await this.#store.increment(key, this.#windowSeconds);
 			if (counted.count > highest.count) highest = counted;
+			if (counted.count > this.#maxAttempts) break;
 		}
 		return {
 			allowed: highest.count <= this.#maxAttempts,
