@@ -693,17 +693,28 @@ export class WebauthnProvider {
 		expectedType: "webauthn.create" | "webauthn.get",
 		expectedChallenge: string,
 	): boolean {
-		let parsed: { type?: string; challenge?: string; origin?: string };
+		let parsed: unknown;
 		try {
 			parsed = JSON.parse(base64urlToBuffer(clientDataB64).toString("utf8"));
 		} catch {
 			return false;
 		}
+		// Attacker-supplied: `null`, an array or a scalar parse fine and are not
+		// client data. Reading a field off `null` threw a TypeError that escaped
+		// the ceremony as a 500 instead of a plain refusal.
+		if (
+			typeof parsed !== "object" ||
+			parsed === null ||
+			Array.isArray(parsed)
+		) {
+			return false;
+		}
+		const origin: unknown = Reflect.get(parsed, "origin");
 		return (
-			parsed.type === expectedType &&
-			parsed.challenge === expectedChallenge &&
-			typeof parsed.origin === "string" &&
-			this.#origins.includes(parsed.origin)
+			Reflect.get(parsed, "type") === expectedType &&
+			Reflect.get(parsed, "challenge") === expectedChallenge &&
+			typeof origin === "string" &&
+			this.#origins.includes(origin)
 		);
 	}
 

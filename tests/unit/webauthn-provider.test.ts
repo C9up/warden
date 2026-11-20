@@ -759,3 +759,54 @@ describe("warden > WebauthnProvider — offered algorithms", () => {
 		expect(await credentials.findByUser(USER.id)).toEqual([]);
 	});
 });
+
+describe("WebauthnProvider > a clientDataJSON that is not a JSON object", () => {
+	// Anonymous input: a 4-byte `null` used to dereference null and escape as a
+	// TypeError (a 500), after the ceremony had already been consumed.
+	const payloads = ["null", "[]", '"x"', "1", "true"];
+
+	function provider(): WebauthnProvider {
+		return new WebauthnProvider({
+			rpName: "Fluveo",
+			rpID: RP_ID,
+			origin: ORIGIN,
+		});
+	}
+
+	it.each(payloads)(
+		"finishAuthentication answers unverified for %s",
+		async (json) => {
+			const wa = provider();
+			const { state } = await wa.startAuthentication("u1");
+			const result = await wa.finishAuthentication(state, {
+				id: "a",
+				rawId: "a",
+				type: "public-key",
+				response: {
+					clientDataJSON: Buffer.from(json).toString("base64url"),
+					authenticatorData: "",
+					signature: "",
+				},
+			});
+			expect(result).toEqual({ verified: false });
+		},
+	);
+
+	it.each(payloads)(
+		"finishRegistration answers unverified for %s",
+		async (json) => {
+			const wa = provider();
+			const { state } = await wa.startRegistration({ id: "u1", name: "u1" });
+			const result = await wa.finishRegistration(state, "u1", {
+				id: "a",
+				rawId: "a",
+				type: "public-key",
+				response: {
+					clientDataJSON: Buffer.from(json).toString("base64url"),
+					attestationObject: "",
+				},
+			});
+			expect(result).toEqual({ verified: false });
+		},
+	);
+});
