@@ -67,7 +67,7 @@ describe("warden > bouncer > abilities", () => {
 		}
 		expect(thrown).toBeInstanceOf(WardenError);
 		if (thrown instanceof WardenError) {
-			expect(thrown.code).toBe("E_WARDEN_AUTHORIZATION_FAILURE");
+			expect(thrown.code).toBe("E_AUTHORIZATION_FAILURE");
 			expect(thrown.status).toBe(403);
 		}
 	});

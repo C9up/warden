@@ -491,7 +491,7 @@ export interface BouncerRegistry {
  * from the authenticated user (`ctx.auth?.user`, or `null` for a guest), the
  * shared `RightsResolver`, and the registered abilities/policies, then attaches
  * it as `ctx.bouncer`. Handlers authorize via `await ctx.bouncer.authorize(...)`
- * (throws `AUTHORIZATION_FAILURE` carrying `status: 403`, which the host's
+ * (throws `E_AUTHORIZATION_FAILURE` carrying `status: 403`, which the host's
  * ExceptionHandler maps to a 403 response) or branch on `ctx.bouncer.allows(...)`.
  *
  * Unlike `wardenMiddleware` (a per-route GUARD that short-circuits public

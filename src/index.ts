@@ -87,6 +87,7 @@ export { configure } from "./configure.js";
 export type { TokenDuration } from "./duration.js";
 export { parseDurationSeconds } from "./duration.js";
 export {
+	E_AUTHORIZATION_FAILURE,
 	E_INVALID_CREDENTIALS,
 	E_UNAUTHORIZED_ACCESS,
 	WardenError,

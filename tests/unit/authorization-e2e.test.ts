@@ -154,7 +154,7 @@ describe("warden > authorization e2e (AC2 — all facets in one flow)", () => {
 		await expect(
 			bouncerFor({ id: "nobody" }, store).with(PostPolicy).authorize("edit"),
 		).rejects.toMatchObject({
-			code: "E_WARDEN_AUTHORIZATION_FAILURE",
+			code: "E_AUTHORIZATION_FAILURE",
 			status: 403,
 		});
 	});

@@ -9,7 +9,7 @@
  */
 
 import type { UserPayload } from "../AuthManager.js";
-import { WardenError } from "../errors.js";
+import { E_AUTHORIZATION_FAILURE } from "../errors.js";
 import { AuthorizationResponse } from "./AuthorizationResponse.js";
 import type { AuthorizerResponse, HookResponse } from "./types.js";
 
@@ -56,18 +56,15 @@ export function isAction(value: unknown): value is Action {
 	return typeof value === "function";
 }
 
-/** Throw the canonical authorization failure for a denied response (D2). */
+/**
+ * Throw the canonical authorization failure for a denied response (D2) —
+ * `E_AUTHORIZATION_FAILURE`, carrying the response so its status, message and
+ * translation reach whoever handles the error.
+ */
 export function throwAuthorizationFailure(
 	response: AuthorizationResponse,
 ): never {
-	throw new WardenError(
-		"AUTHORIZATION_FAILURE",
-		response.message ?? "Authorization failed",
-		{
-			hint: "The current user is not authorized for this action.",
-			status: response.status ?? 403,
-		},
-	);
+	throw new E_AUTHORIZATION_FAILURE(response);
 }
 
 /** Run the D5 evaluation pipeline and resolve to the final response. */

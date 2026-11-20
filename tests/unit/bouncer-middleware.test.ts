@@ -116,7 +116,7 @@ describe("warden > initializeBouncer", () => {
 		await expect(
 			ctx.bouncer?.authorize("post.edit", { ownerId: "u1" }),
 		).rejects.toMatchObject({
-			code: "E_WARDEN_AUTHORIZATION_FAILURE",
+			code: "E_AUTHORIZATION_FAILURE",
 			status: 403,
 		});
 	});
@@ -168,7 +168,7 @@ describe("warden > initializeBouncer", () => {
 		await expect(
 			ctx.bouncer?.authorize("post.edit", { ownerId: "u1" }),
 		).rejects.toMatchObject({
-			code: "E_WARDEN_AUTHORIZATION_FAILURE",
+			code: "E_AUTHORIZATION_FAILURE",
 			status: 403,
 		});
 	});

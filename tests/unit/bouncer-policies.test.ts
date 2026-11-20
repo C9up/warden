@@ -38,7 +38,7 @@ describe("warden > bouncer > policies", () => {
 		const stranger = new Bouncer(user({ id: "u2" })).with(PostPolicy);
 		expect(await stranger.allows("edit", post)).toBe(false);
 		await expect(stranger.authorize("edit", post)).rejects.toMatchObject({
-			code: "E_WARDEN_AUTHORIZATION_FAILURE",
+			code: "E_AUTHORIZATION_FAILURE",
 		});
 	});
 
