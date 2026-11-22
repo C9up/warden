@@ -50,6 +50,11 @@ const live = url ? await serverAnswers() : false;
 // A URL that answers nothing is a broken environment, not a missing one: the
 // suite exists to prove the revocation mechanism against a real server, and a
 // silent skip would let the release gate pass with nothing run.
+if (url === "" && process.env.CI === "true") {
+	throw new Error(
+		"REDIS_TEST_URL is not set on CI: refusing to skip the live-Redis suite.",
+	);
+}
 if (url && !live) {
 	throw new Error(
 		`REDIS_TEST_URL is set (${url}) but no server answers: refusing to skip the live-Redis suite.`,
