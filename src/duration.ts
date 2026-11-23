@@ -13,6 +13,11 @@
  * than either one being wrong alone.
  */
 
+import {
+	E_WARDEN_INVALID_DURATION,
+	E_WARDEN_TOKEN_TTL_INVALID,
+} from "./errors.js";
+
 const UNIT_SECONDS: Record<string, number> = {
 	ms: 1 / 1000,
 	msec: 1 / 1000,
@@ -63,16 +68,18 @@ export type TokenDuration = number | string;
 export function parseDurationSeconds(value: string): number {
 	const match = DURATION_RE.exec(value);
 	if (!match) {
-		throw new TypeError(`Warden: invalid duration "${value}"`);
+		throw new E_WARDEN_INVALID_DURATION([
+			`Warden: invalid duration "${value}"`,
+		]);
 	}
 	const amount = Number(match[1]);
 	const unit = match[2]?.toLowerCase();
 	if (unit === undefined) return amount;
 	const factor = UNIT_SECONDS[unit];
 	if (factor === undefined) {
-		throw new TypeError(
+		throw new E_WARDEN_INVALID_DURATION([
 			`Warden: unknown duration unit "${unit}" in "${value}"`,
-		);
+		]);
 	}
 	return amount * factor;
 }
@@ -93,17 +100,17 @@ export function resolveExpiresInSeconds(
 	const seconds =
 		typeof chosen === "number" ? chosen : parseDurationSeconds(chosen);
 	if (!Number.isFinite(seconds) || seconds <= 0) {
-		throw new TypeError(
+		throw new E_WARDEN_TOKEN_TTL_INVALID([
 			`Warden: token lifetime must be a positive duration, got ${JSON.stringify(chosen)}`,
-		);
+		]);
 	}
 	// A token's `exp` is whole seconds: "500ms" made it fractional, and the
 	// engine reads a fractional `exp` as a missing one — the token was dead on
 	// issue.
 	if (!Number.isInteger(seconds)) {
-		throw new TypeError(
+		throw new E_WARDEN_TOKEN_TTL_INVALID([
 			`Warden: token lifetime must be a whole number of seconds, got ${JSON.stringify(chosen)}`,
-		);
+		]);
 	}
 	return seconds;
 }

@@ -27,7 +27,15 @@ import type {
 	UserPayload,
 } from "./AuthManager.js";
 import { readBearerToken } from "./bearer.js";
-import { E_UNAUTHORIZED_ACCESS, WardenError } from "./errors.js";
+import {
+	E_UNAUTHORIZED_ACCESS,
+	E_WARDEN_AUTH_STRATEGY_ERROR,
+	E_WARDEN_INVALID_CONFIG,
+	E_WARDEN_NO_SESSION,
+	E_WARDEN_REMEMBER_ME_UNAVAILABLE,
+	E_WARDEN_STRATEGY_CANNOT_ISSUE,
+	E_WARDEN_STRATEGY_HAS_NO_CLIENT,
+} from "./errors.js";
 import type { WardenContext } from "./middleware.js";
 import type { Scope } from "./rights/types.js";
 import { sanitizePayload } from "./sanitize.js";
@@ -317,7 +325,7 @@ async function tryAuthenticate(
 				);
 			}
 		} catch (err) {
-			// AuthManager rethrows structured WardenError sentinels — treat these
+			// AuthManager rethrows warden's own errors — treat these
 			// as crashes too (config errors, SessionStrategy.USE_LOGIN, etc.).
 			crashCount++;
 			console.error(
@@ -411,20 +419,20 @@ export class GuardAccessor {
 		const strategy = this.#auth.getStrategy(this.#name);
 		const seam: unknown = Reflect.get(strategy, "authenticateAsClient");
 		if (typeof seam !== "function") {
-			throw new WardenError(
-				"STRATEGY_HAS_NO_CLIENT",
-				`Auth strategy '${this.#name}' has no authenticateAsClient() — it cannot forge a client request.`,
+			throw Object.assign(
+				new E_WARDEN_STRATEGY_HAS_NO_CLIENT([
+					`Auth strategy '${this.#name}' has no authenticateAsClient() — it cannot forge a client request.`,
+				]),
 				{
-					hint: "Implement authenticateAsClient() on the strategy, or authenticate through a real login in the test.",
+					help: "Implement authenticateAsClient() on the strategy, or authenticate through a real login in the test.",
 				},
 			);
 		}
 		const response: unknown = await Reflect.apply(seam, strategy, args);
 		if (!isAuthClientResponse(response)) {
-			throw new WardenError(
-				"STRATEGY_HAS_NO_CLIENT",
+			throw new E_WARDEN_STRATEGY_HAS_NO_CLIENT([
 				`Auth strategy '${this.#name}' answered authenticateAsClient() with no client response.`,
-			);
+			]);
 		}
 		return response;
 	}
@@ -465,11 +473,12 @@ export class GuardAccessor {
 	#tokenIssuer(): AccessTokenIssuer {
 		const strategy = this.#auth.getStrategy(this.#name);
 		if (!isAccessTokenIssuer(strategy)) {
-			throw new WardenError(
-				"STRATEGY_CANNOT_ISSUE",
-				`Guard '${this.#name}' does not issue access tokens.`,
+			throw Object.assign(
+				new E_WARDEN_STRATEGY_CANNOT_ISSUE([
+					`Guard '${this.#name}' does not issue access tokens.`,
+				]),
 				{
-					hint: "createToken()/invalidateToken() belong to an access-tokens guard (apiKeyGuard). A JWT guard signs with auth.issueFor(user, guard).",
+					help: "createToken()/invalidateToken() belong to an access-tokens guard (apiKeyGuard). A JWT guard signs with auth.issueFor(user, guard).",
 				},
 			);
 		}
@@ -629,31 +638,34 @@ export class GuardAccessor {
 	async #issueRememberMe(user: UserPayload): Promise<string> {
 		const strategy = strategyOrUndefined(this.#auth, this.#name);
 		if (!strategy || !isRememberMeIssuer(strategy)) {
-			throw new WardenError(
-				"REMEMBER_ME_UNAVAILABLE",
-				`Guard '${this.#name}' cannot keep a user signed in: no remember-me tokens are configured.`,
+			throw Object.assign(
+				new E_WARDEN_REMEMBER_ME_UNAVAILABLE([
+					`Guard '${this.#name}' cannot keep a user signed in: no remember-me tokens are configured.`,
+				]),
 				{
-					hint: "Set `rememberMeTokens` on the session guard, or call login(user) without the remember flag.",
+					help: "Set `rememberMeTokens` on the session guard, or call login(user) without the remember flag.",
 				},
 			);
 		}
 		const value = await strategy.issueRememberMeToken(user);
 		if (value === null) {
-			throw new WardenError(
-				"REMEMBER_ME_UNAVAILABLE",
-				`Guard '${this.#name}' cannot keep a user signed in: no remember-me tokens are configured.`,
+			throw Object.assign(
+				new E_WARDEN_REMEMBER_ME_UNAVAILABLE([
+					`Guard '${this.#name}' cannot keep a user signed in: no remember-me tokens are configured.`,
+				]),
 				{
-					hint: "Set `rememberMeTokens` on the session guard, or call login(user) without the remember flag.",
+					help: "Set `rememberMeTokens` on the session guard, or call login(user) without the remember flag.",
 				},
 			);
 		}
 		const write = this.#ctx.response.encryptedCookie;
 		if (!write) {
-			throw new WardenError(
-				"REMEMBER_ME_UNAVAILABLE",
-				"This host cannot write an encrypted cookie, which is where the remember-me token lives.",
+			throw Object.assign(
+				new E_WARDEN_REMEMBER_ME_UNAVAILABLE([
+					"This host cannot write an encrypted cookie, which is where the remember-me token lives.",
+				]),
 				{
-					hint: "Use a host whose response exposes encryptedCookie(), or call login(user) without the remember flag.",
+					help: "Use a host whose response exposes encryptedCookie(), or call login(user) without the remember flag.",
 				},
 			);
 		}
@@ -698,11 +710,12 @@ export class GuardAccessor {
 			? Reflect.get(strategy, "markMfaVerified")
 			: undefined;
 		if (typeof mark !== "function") {
-			throw new WardenError(
-				"INVALID_CONFIG",
-				`Guard '${this.#name}' keeps no session to record an MFA step-up in.`,
+			throw Object.assign(
+				new E_WARDEN_INVALID_CONFIG([
+					`Guard '${this.#name}' keeps no session to record an MFA step-up in.`,
+				]),
 				{
-					hint: "Sign a token with the step-up instead: auth.issueFor(user, guard, { mfa: true }).",
+					help: "Sign a token with the step-up instead: auth.issueFor(user, guard, { mfa: true }).",
 				},
 			);
 		}
@@ -754,10 +767,7 @@ export class GuardAccessor {
 
 	#requireSession(): SessionStore {
 		if (!this.#ctx.session) {
-			throw new WardenError(
-				"NO_SESSION",
-				`Guard '${this.#name}'.login()/logout() requires a session, but ctx.session is unset. Register the session middleware upstream.`,
-			);
+			throw new E_WARDEN_NO_SESSION([this.#name]);
 		}
 		return this.#ctx.session;
 	}
@@ -976,11 +986,7 @@ export class Authenticator {
 		// Every attempted guard crashed → a server-side incident, not a
 		// credential rejection. Surface distinctly (mapped to 500 by the caller).
 		if (attemptCount > 0 && crashCount === attemptCount) {
-			throw new WardenError(
-				"AUTH_STRATEGY_ERROR",
-				"Authentication unavailable — one or more strategies failed. Check server logs.",
-				{ status: 500 },
-			);
+			throw new E_WARDEN_AUTH_STRATEGY_ERROR();
 		}
 		// A Basic guard among those tried: the 401 must carry its challenge,
 		// or the browser never asks for credentials (AdonisJS basic_auth does

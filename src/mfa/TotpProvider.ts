@@ -8,7 +8,7 @@
  */
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { WardenError } from "../errors.js";
+import { E_WARDEN_INVALID_CONFIG } from "../errors.js";
 import { hasEnded } from "../vendor/quasarConnection.js";
 import { base32Decode, base32Encode } from "./base32.js";
 
@@ -24,10 +24,9 @@ export function assertIntegerIn(
 	max: number,
 ): void {
 	if (!Number.isInteger(value) || value < min || value > max) {
-		throw new WardenError(
-			"INVALID_CONFIG",
+		throw new E_WARDEN_INVALID_CONFIG([
 			`${what} must be a whole number from ${min} to ${max}, got ${String(value)}`,
-		);
+		]);
 	}
 }
 
@@ -190,10 +189,9 @@ export class TotpProvider {
 		assertIntegerIn("TOTP period", this.#cfg.period, 1, 3600);
 		assertIntegerIn("TOTP window", this.#cfg.window, 0, 10);
 		if (!TOTP_ALGORITHMS.includes(this.#cfg.algorithm)) {
-			throw new WardenError(
-				"INVALID_CONFIG",
+			throw new E_WARDEN_INVALID_CONFIG([
 				`TOTP algorithm must be one of ${TOTP_ALGORITHMS.join(", ")}, got ${String(this.#cfg.algorithm)}`,
-			);
+			]);
 		}
 	}
 

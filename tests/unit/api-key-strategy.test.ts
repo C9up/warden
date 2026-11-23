@@ -79,6 +79,9 @@ describe("warden > ApiKeyStrategy — configuration", () => {
 		await expect(
 			strategy.authenticate({ email: "a", password: "b" }),
 		).rejects.toThrow(/does not support credential-based auth/);
+		await expect(
+			strategy.authenticate({ email: "a", password: "b" }),
+		).rejects.toMatchObject({ code: "E_WARDEN_STRATEGY_CANNOT_AUTHENTICATE" });
 	});
 });
 

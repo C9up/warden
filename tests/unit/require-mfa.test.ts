@@ -11,7 +11,14 @@ import {
 	type UserPayload,
 } from "../../src/AuthManager.js";
 import { Guard, getRequireMfaMetadata, RequireMfa } from "../../src/Guard.js";
-import { type WardenContext, wardenMiddleware } from "../../src/middleware.js";
+import {
+	wardenMiddleware as unhandledWardenMiddleware,
+	type WardenContext,
+} from "../../src/middleware.js";
+import { withExceptionHandler } from "./support/exceptionHandler.js";
+
+/** The middleware as the host runs it, behind its exception handler. */
+const wardenMiddleware = withExceptionHandler(unhandledWardenMiddleware);
 
 class SensitiveController {
 	@Guard("jwt")

@@ -335,6 +335,15 @@ describe("warden > numbers that switched a protection off (042, 043)", () => {
 					expiresIn: "500ms",
 				}),
 		).toThrow(/whole number of seconds/);
+		expect(
+			() =>
+				new JwtStrategy({
+					secret: "a-secret-long-enough-for-hs256-signing",
+					verifyCredentials: async () => USER,
+					findUser: async () => USER,
+					expiresIn: 0,
+				}),
+		).toThrow(expect.objectContaining({ code: "E_WARDEN_TOKEN_TTL_INVALID" }));
 	});
 });
 

@@ -18,11 +18,19 @@
 
 import { Authenticator } from "./Authenticator.js";
 import { AuthManager, tokenAllows, type UserPayload } from "./AuthManager.js";
+import { AuthorizationResponse } from "./bouncer/AuthorizationResponse.js";
 import type { BasePolicy } from "./bouncer/BasePolicy.js";
 import { Bouncer } from "./bouncer/Bouncer.js";
 import type { Ability, PolicyContainerResolver } from "./bouncer/types.js";
 import type { ScopeRequestContext } from "./config.js";
-import { E_UNAUTHORIZED_ACCESS, WardenError } from "./errors.js";
+import { renderUnauthorizedAccess } from "./errorResponses.js";
+import {
+	E_AUTHORIZATION_FAILURE,
+	type E_UNAUTHORIZED_ACCESS,
+	E_WARDEN_AUTH_NOT_REGISTERED,
+	E_WARDEN_AUTH_STRATEGY_ERROR,
+	E_WARDEN_POLICY_RESOLUTION_FAILED,
+} from "./errors.js";
 import {
 	getGuardMetadata,
 	getPermissionMetadata,
@@ -73,10 +81,7 @@ function policyResolver(
 		async make<T>(ctor: new (...args: never[]) => T): Promise<T> {
 			const instance = await resolver.make(ctor);
 			if (!(instance instanceof ctor)) {
-				throw new WardenError(
-					"POLICY_RESOLUTION_FAILED",
-					`The container resolved "${ctor.name}" to something else — a policy must be an instance of the class that was requested.`,
-				);
+				throw new E_WARDEN_POLICY_RESOLUTION_FAILED([ctor.name]);
 			}
 			return instance;
 		},
@@ -103,6 +108,14 @@ export interface WardenContext {
 		headers(): Record<string, string>;
 		/** Read the encrypted remember-me cookie back. Optional, like its writer. */
 		encryptedCookie?: (name: string) => string | null;
+		/**
+		 * Content negotiation: the first of `types` the client accepts. Read by
+		 * a refusal's `handle` to pick its format; without it the refusal is
+		 * written as text.
+		 */
+		accepts?<T extends string>(types: T[]): T | null;
+		/** The HTTP method: a denied form submission is redirected back. */
+		method?(): string;
 	};
 	/**
 	 * Per-request IoC resolver (Ream's `ctx.containerResolver`). Warden resolves
@@ -113,6 +126,11 @@ export interface WardenContext {
 	response: {
 		status: (code: number) => unknown;
 		json: (data: unknown) => void;
+		/**
+		 * Write a body as is (text, or an object as JSON) — what a refusal's
+		 * `handle` writes with. Without it, the body goes through `json`.
+		 */
+		send?: (body: unknown) => unknown;
 		/** Set a response header — the `WWW-Authenticate` challenge of a 401. */
 		header?: (name: string, value: string) => unknown;
 		/**
@@ -131,10 +149,9 @@ export interface WardenContext {
 		/** Drop a cookie (used to clear the remember-me one). */
 		clearCookie?: (name: string, options?: Record<string, unknown>) => unknown;
 		/**
-		 * Redirect the response (Ream's `ctx.response.redirect`). Optional so a
-		 * minimal host without it still gets the 401 JSON fallback — Warden does
-		 * its own content negotiation (see `renderAuthError`) rather than leaning
-		 * on the host's exception handler.
+		 * Redirect the response (Ream's `ctx.response.redirect`): the login
+		 * route of a refused HTML request, or back to a denied form. Optional so
+		 * a minimal host without it still gets the 401 JSON fallback.
 		 */
 		redirect?: (url: string) => unknown;
 	};
@@ -244,10 +261,7 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 		// Fail CLOSED — a missing AuthManager (WardenProvider not registered, or
 		// no `ctx.containerResolver` on a non-Ream host) must never silently let
 		// a guarded request through.
-		throw new WardenError(
-			"AUTH_NOT_REGISTERED",
-			"AuthManager is not registered in the container — add WardenProvider to your providers list.",
-		);
+		throw new E_WARDEN_AUTH_NOT_REGISTERED();
 	}
 	const auth = resolvedAuth;
 
@@ -283,18 +297,18 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 	// and the functional path share one code path. It sets `ctx.auth` and throws
 	// on failure — E_UNAUTHORIZED_ACCESS (401, credential rejection) or a
 	// E_WARDEN_AUTH_STRATEGY_ERROR (500, every attempted guard crashed).
+	//
+	// The 401 propagates, as AdonisJS's `auth` middleware lets it: the host's
+	// exception handler calls its `handle`, which writes the refusal (a
+	// redirect to the login route, a challenge, or the JSON body).
 	const authenticator = ensureAuthenticator(ctx, auth);
 	const loginRoute = await resolveLoginRoute(ctx);
 	try {
 		await authenticator.authenticateUsing(strategies, { loginRoute });
 	} catch (err) {
-		if (err instanceof E_UNAUTHORIZED_ACCESS) {
-			renderAuthError(ctx, err);
-			return;
-		}
 		// Every attempted guard crashed → server-side incident, mapped to 500 so
 		// it stays observably distinct from a credential rejection.
-		if (err instanceof WardenError && err.status === 500) {
+		if (err instanceof E_WARDEN_AUTH_STRATEGY_ERROR) {
 			ctx.response.status(500);
 			ctx.response.json({
 				error: { code: "E_WARDEN_AUTH_STRATEGY_ERROR", message: err.message },
@@ -312,19 +326,14 @@ export async function wardenMiddleware(ctx: WardenContext, next: WardenNext) {
 	// role-OR-permission semantics should use a custom guard instead.
 	if (controller && action) {
 		const scope = await resolveRequestScope(ctx);
-		const denied = await checkAuthorization(
-			auth,
-			user,
-			controller,
-			action,
-			scope,
-		);
-		if (denied) {
-			ctx.response.status(403);
-			ctx.response.json({
-				error: { code: "E_WARDEN_FORBIDDEN", message: denied },
-			});
-			return;
+		if (!(await isAuthorized(auth, user, controller, action, scope))) {
+			// The same failure as a denied `authorize()`, thrown as bouncer
+			// throws it: the host's exception handler calls its `handle`, so the
+			// refusal is written the one way every denial is, and a form
+			// submission is flashed and redirected back. The roles and
+			// permissions asked for are not carried: the list would tell the
+			// client what to obtain.
+			throw new E_AUTHORIZATION_FAILURE(AuthorizationResponse.deny());
 		}
 
 		// @RequireMfa gate: the user must carry a truthy `mfa` claim, set by the
@@ -446,33 +455,16 @@ async function resolveLoginRoute(
 }
 
 /**
- * Render an `E_UNAUTHORIZED_ACCESS` to the response — Warden does its OWN content
- * negotiation (AdonisJS session renderer parity) instead of leaning on the
- * host's exception handler, so it stays agnostic. An `Accept: text/html` request
- * against a session guard carrying a `redirectTo` is redirected to the login
- * route; every other case gets a 401 JSON body. Always fail-closed.
+ * Render an `E_UNAUTHORIZED_ACCESS` to the response, as its own `handle`
+ * does: an `Accept: text/html` request against a session guard carrying a
+ * `redirectTo` is redirected to the login route; every other case gets a 401
+ * JSON body. Always fail-closed.
  */
 export function renderAuthError(
 	ctx: WardenContext,
 	error: E_UNAUTHORIZED_ACCESS,
 ): void {
-	const accept = ctx.request.headers().accept ?? "";
-	const wantsHtml = accept.includes("text/html");
-	if (wantsHtml && error.redirectTo && ctx.response.redirect) {
-		ctx.response.redirect(error.redirectTo);
-		return;
-	}
-	if (error.challenge !== undefined) {
-		ctx.response.header?.call(
-			ctx.response,
-			"WWW-Authenticate",
-			error.challenge,
-		);
-	}
-	ctx.response.status(error.status ?? 401);
-	ctx.response.json({
-		error: { code: error.code, message: error.message },
-	});
+	renderUnauthorizedAccess(ctx, error, error.getResponseMessage(error, ctx));
 }
 
 /**
@@ -568,35 +560,31 @@ async function resolveRequestScope(ctx: WardenContext): Promise<Scope> {
 /**
  * Gate the authenticated user against the route's @Permission / @Role decorators.
  * Both are independent AND gates resolved ONCE against the same unified
- * EffectivePermissions set (Epic 56, D7). Returns the FORBIDDEN message, or null
- * when authorised (and zero-cost when neither decorator is present).
+ * EffectivePermissions set (Epic 56, D7). Zero-cost when neither decorator is
+ * present.
  */
-async function checkAuthorization(
+async function isAuthorized(
 	auth: AuthManager,
 	user: UserPayload,
 	controller: object,
 	action: string | symbol,
 	scope: Scope,
-): Promise<string | null> {
+): Promise<boolean> {
 	const requiredPermissions = getPermissionMetadata(controller, action);
 	const requiredRoles = getRoleMetadata(controller, action);
 	if (requiredPermissions.length === 0 && requiredRoles.length === 0) {
-		return null;
+		return true;
 	}
 	const effective = await auth.resolvePermissions(user, scope);
 	if (requiredPermissions.length > 0) {
 		// The user must hold it, and the token the request came in with, if
 		// any, must allow it: an intersection, never a union.
-		const missing = requiredPermissions.filter(
-			(p) => !effective.has(p) || !tokenAllows(user, p),
+		const held = requiredPermissions.every(
+			(p) => effective.has(p) && tokenAllows(user, p),
 		);
-		if (missing.length > 0) return `Missing permissions: ${missing.join(", ")}`;
+		if (!held) return false;
 	}
-	if (requiredRoles.length > 0) {
-		const missing = requiredRoles.filter((r) => !effective.roles.has(r));
-		if (missing.length > 0) return `Missing roles: ${missing.join(", ")}`;
-	}
-	return null;
+	return requiredRoles.every((r) => effective.roles.has(r));
 }
 
 /**

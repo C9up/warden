@@ -12,6 +12,7 @@ import {
 	parseDurationSeconds,
 	resolveExpiresInSeconds,
 } from "../../src/duration.js";
+import * as errors from "../../src/errors.js";
 import { JwtStrategy } from "../../src/strategies/JwtStrategy.js";
 
 describe("warden > duration strings", () => {
@@ -33,9 +34,21 @@ describe("warden > duration strings", () => {
 	it("refuses what it cannot read rather than guessing", () => {
 		// A lifetime that quietly resolves to zero logs everyone out, and the
 		// cause surfaces days later as "sessions are flaky".
-		expect(() => parseDurationSeconds("soon")).toThrow(TypeError);
-		expect(() => parseDurationSeconds("5 fortnights")).toThrow(TypeError);
-		expect(() => parseDurationSeconds("")).toThrow(TypeError);
+		expect(() => parseDurationSeconds("soon")).toThrow(
+			errors.E_WARDEN_INVALID_DURATION,
+		);
+		expect(() => parseDurationSeconds("5 fortnights")).toThrow(
+			errors.E_WARDEN_INVALID_DURATION,
+		);
+		expect(() => parseDurationSeconds("")).toThrow(
+			errors.E_WARDEN_INVALID_DURATION,
+		);
+		expect(() => parseDurationSeconds("soon")).toThrow(
+			expect.objectContaining({ code: "E_WARDEN_INVALID_DURATION" }),
+		);
+		expect(() => parseDurationSeconds("5 fortnights")).toThrow(
+			expect.objectContaining({ code: "E_WARDEN_INVALID_DURATION" }),
+		);
 	});
 });
 
@@ -60,10 +73,10 @@ describe("warden > resolving a lifetime", () => {
 		// A token already expired when issued authenticates nobody, and the
 		// symptom — every request 401s — points nowhere near the config.
 		expect(() => resolveExpiresInSeconds(0, undefined, 3600)).toThrow(
-			TypeError,
+			errors.E_WARDEN_TOKEN_TTL_INVALID,
 		);
 		expect(() => resolveExpiresInSeconds(-1, undefined, 3600)).toThrow(
-			TypeError,
+			errors.E_WARDEN_TOKEN_TTL_INVALID,
 		);
 	});
 });

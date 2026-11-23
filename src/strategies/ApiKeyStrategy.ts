@@ -31,7 +31,10 @@ import type {
 	AuthStrategy,
 	UserPayload,
 } from "../AuthManager.js";
-import { WardenError } from "../errors.js";
+import {
+	E_WARDEN_INVALID_CONFIG,
+	E_WARDEN_STRATEGY_CANNOT_AUTHENTICATE,
+} from "../errors.js";
 import { Secret } from "../Secret.js";
 
 export interface ApiKeyConfig {
@@ -64,19 +67,19 @@ export class ApiKeyStrategy implements AuthStrategy {
 		// refused at boot rather than at the first request.
 		const tokens: unknown = Reflect.get(Object(config), "tokens");
 		if (typeof Reflect.get(Object(tokens), "verify") !== "function") {
-			throw new WardenError(
-				"INVALID_CONFIG",
-				"The access-tokens guard needs `tokens`, a provider that verifies hashed tokens.",
+			throw Object.assign(
+				new E_WARDEN_INVALID_CONFIG([
+					"The access-tokens guard needs `tokens`, a provider that verifies hashed tokens.",
+				]),
 				{
-					hint: "apiKeyGuard({ tokens: new AccessTokensProvider({ store }), findUser: (id) => User.find(id) })",
+					help: "apiKeyGuard({ tokens: new AccessTokensProvider({ store }), findUser: (id) => User.find(id) })",
 				},
 			);
 		}
 		if (typeof config.findUser !== "function") {
-			throw new WardenError(
-				"INVALID_CONFIG",
+			throw new E_WARDEN_INVALID_CONFIG([
 				"The access-tokens guard needs `findUser`, to load the user a token belongs to.",
-			);
+			]);
 		}
 		this.#config = config;
 		this.#headerName = config.headerName ?? "x-api-key";
@@ -91,9 +94,7 @@ export class ApiKeyStrategy implements AuthStrategy {
 		email: string;
 		password: string;
 	}): Promise<AuthResult> {
-		throw new Error(
-			"ApiKeyStrategy does not support credential-based auth. Use verify() with the access token.",
-		);
+		throw new E_WARDEN_STRATEGY_CANNOT_AUTHENTICATE();
 	}
 
 	/**
@@ -133,10 +134,9 @@ export class ApiKeyStrategy implements AuthStrategy {
 		const token = await this.createToken(user, abilities, options);
 		const value = token.value?.release();
 		if (value === undefined) {
-			throw new WardenError(
-				"INVALID_CONFIG",
+			throw new E_WARDEN_INVALID_CONFIG([
 				"The token provider returned a token without its value from create().",
-			);
+			]);
 		}
 		return { headers: { authorization: `Bearer ${value}` } };
 	}

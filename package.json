@@ -51,7 +51,7 @@
   "peerDependencies": {
     "@c9up/inker": "^0.1.20",
     "@c9up/quasar": "^0.1.0 || ^0.2.0",
-    "@c9up/ream": "^0.2.28"
+    "@c9up/ream": "^0.2.32"
   },
   "peerDependenciesMeta": {
     "@c9up/inker": {
@@ -77,11 +77,14 @@
     "prepublishOnly": "tsc -p tsconfig.build.json",
     "test:integration": "vitest run -c vitest.integration.config.ts"
   },
+  "dependencies": {
+    "@c9up/flare": "^0.1.0"
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.6.8",
     "@c9up/inker": "^0.1.20",
     "@c9up/quasar": "^0.1.0 || ^0.2.0",
-    "@c9up/ream": "^0.2.25",
+    "@c9up/ream": "^0.2.32",
     "@types/node": "^22.20.1",
     "@vitest/coverage-v8": "4.1.12",
     "reflect-metadata": "^0.2.2",

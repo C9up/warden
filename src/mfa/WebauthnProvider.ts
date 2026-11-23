@@ -17,7 +17,14 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { WardenError } from "../errors.js";
+import {
+	E_WARDEN_INVALID_CONFIG,
+	E_WARDEN_INVALID_CREDENTIAL,
+	E_WARDEN_STORE_LIMIT_INVALID,
+	E_WARDEN_STORE_TTL_INVALID,
+	E_WARDEN_WEBAUTHN_CREDENTIAL_EXISTS,
+	E_WARDEN_WEBAUTHN_STORE_FULL,
+} from "../errors.js";
 import {
 	base64urlToBuffer,
 	bufferToBase64url,
@@ -117,24 +124,6 @@ export interface WebauthnChallengeStore {
 	take(state: string): Promise<WebauthnCeremony | null>;
 }
 
-/**
- * Thrown by `WebauthnCredentialStore.save` when the credential id is already
- * registered. `finishRegistration` turns it into `{ verified: false }`; any
- * other error from the store is an outage and propagates.
- */
-export class WebauthnCredentialExistsError extends WardenError {
-	constructor(credentialId: string) {
-		super(
-			"E_WARDEN_WEBAUTHN_CREDENTIAL_EXISTS",
-			`The WebAuthn credential "${credentialId}" is already registered.`,
-			{
-				hint: "A credential id belongs to the account that registered it first. Keep it unique in the store (INSERT, never upsert).",
-			},
-		);
-		this.name = "WebauthnCredentialExistsError";
-	}
-}
-
 /** A registered passkey, persisted between ceremonies. */
 export interface StoredPasskey {
 	/** Base64URL credential id. */
@@ -159,7 +148,7 @@ export interface WebauthnCredentialStore {
 	 * id and take the passkey over. `finishRegistration` checks `findById`
 	 * first; the store closes the race between that check and this write: a
 	 * persistent store keeps `id` unique (primary key / unique index, Redis
-	 * `SET … NX`) and throws `WebauthnCredentialExistsError` when the id is
+	 * `SET … NX`) and throws `E_WARDEN_WEBAUTHN_CREDENTIAL_EXISTS` when the id is
 	 * already taken, so a concurrent registration of the same id fails.
 	 */
 	save(passkey: StoredPasskey): Promise<void>;
@@ -226,13 +215,7 @@ export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
 		// challenge left live indefinitely is exactly the replay window the
 		// expiry exists to close.
 		if (!Number.isInteger(ttlMs) || ttlMs < 1) {
-			throw new WardenError(
-				"E_WARDEN_STORE_TTL_INVALID",
-				`ttlMs must be a positive integer, got ${String(ttlMs)}.`,
-				{
-					hint: "Give the ceremony a lifetime in milliseconds — the default is 300000 (5 min).",
-				},
-			);
+			throw new E_WARDEN_STORE_TTL_INVALID([String(ttlMs)]);
 		}
 		this.#ttlMs = ttlMs;
 		// A ceiling of 0, a negative, NaN or Infinity is not a ceiling: the
@@ -240,13 +223,7 @@ export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
 		// exists to provide, silently. A caller asking for one of those means
 		// something, and none of the meanings is what would have happened.
 		if (!Number.isInteger(maxEntries) || maxEntries < 1) {
-			throw new WardenError(
-				"E_WARDEN_STORE_LIMIT_INVALID",
-				`maxEntries must be a positive integer, got ${String(maxEntries)}.`,
-				{
-					hint: "Pass the number of pending entries this process may hold — the default is 10_000.",
-				},
-			);
+			throw new E_WARDEN_STORE_LIMIT_INVALID([String(maxEntries)]);
 		}
 		this.#maxEntries = maxEntries;
 	}
@@ -270,13 +247,7 @@ export class MemoryWebauthnChallengeStore implements WebauthnChallengeStore {
 		if (this.#store.size >= this.#maxEntries && !this.#store.has(state)) {
 			// Refused rather than evicted: making room by dropping someone
 			// else's pending ceremony is how a flood locks a real user out.
-			throw new WardenError(
-				"E_WARDEN_WEBAUTHN_STORE_FULL",
-				`The in-memory WebAuthn challenge store is full (${this.#maxEntries} pending ceremonies).`,
-				{
-					hint: "Rate-limit the endpoint that starts a ceremony, or move to a persistent store with its own TTL.",
-				},
-			);
+			throw new E_WARDEN_WEBAUTHN_STORE_FULL([this.#maxEntries]);
 		}
 		this.#store.set(state, {
 			...ceremony,
@@ -311,7 +282,7 @@ export class MemoryWebauthnCredentialStore implements WebauthnCredentialStore {
 		// Check and write with no `await` between them: atomic on a
 		// single-threaded runtime, so two registrations of one id cannot both land.
 		if (this.#store.has(passkey.id)) {
-			throw new WebauthnCredentialExistsError(passkey.id);
+			throw new E_WARDEN_WEBAUTHN_CREDENTIAL_EXISTS([passkey.id]);
 		}
 		this.#store.set(passkey.id, passkey);
 	}
@@ -396,10 +367,9 @@ export class WebauthnProvider {
 
 	constructor(config: WebauthnConfig) {
 		if (!config?.rpID || !config?.rpName || !config?.origin) {
-			throw new WardenError(
-				"INVALID_CONFIG",
+			throw new E_WARDEN_INVALID_CONFIG([
 				"WebauthnProvider requires rpName, rpID and origin",
-			);
+			]);
 		}
 		this.#rpName = config.rpName;
 		this.#rpID = config.rpID;
@@ -550,7 +520,7 @@ export class WebauthnProvider {
 		} catch (error) {
 			// A concurrent registration took the id between the check and the
 			// insert. Any other store failure is infrastructure and propagates.
-			if (error instanceof WebauthnCredentialExistsError) {
+			if (error instanceof E_WARDEN_WEBAUTHN_CREDENTIAL_EXISTS) {
 				return { verified: false };
 			}
 			throw error;
@@ -741,7 +711,7 @@ export class WebauthnProvider {
 function expectCoseMap(bytes: Buffer): CborMap {
 	const decoded = decodeCbor(bytes).value;
 	if (!(decoded instanceof Map)) {
-		throw new WardenError("INVALID_CREDENTIAL", "stored COSE key is malformed");
+		throw new E_WARDEN_INVALID_CREDENTIAL();
 	}
 	return decoded;
 }

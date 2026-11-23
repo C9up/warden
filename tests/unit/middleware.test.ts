@@ -6,16 +6,30 @@ import {
 	type AuthStrategy,
 } from "../../src/AuthManager.js";
 import { Guard, Permission, Role } from "../../src/Guard.js";
+import { errors } from "../../src/index.js";
 import WardenMiddleware, {
 	silentAuth,
+	wardenMiddleware as unhandledWardenMiddleware,
 	type WardenContext,
-	wardenMiddleware,
 } from "../../src/middleware.js";
 import { MemoryRightsStore } from "../../src/rights/MemoryRightsStore.js";
 import { RightsResolver } from "../../src/rights/RightsResolver.js";
 import type { Scope } from "../../src/rights/types.js";
 import { JwtStrategy } from "../../src/strategies/JwtStrategy.js";
 import type { SessionStore } from "../../src/strategies/SessionStrategy.js";
+import {
+	acceptsFrom,
+	withExceptionHandler,
+} from "./support/exceptionHandler.js";
+
+/** The error that rendered itself on each context, through its `handle`. */
+const handled = new WeakMap<WardenContext, object>();
+
+/** The middleware as the host runs it, behind its exception handler. */
+const wardenMiddleware = withExceptionHandler(
+	unhandledWardenMiddleware,
+	(error, ctx) => handled.set(ctx, error),
+);
 
 interface RecordedResponse {
 	status?: number;
@@ -67,6 +81,8 @@ function buildCtx(opts: BuildCtxOpts): {
 	const ctx: WardenContext = {
 		request: {
 			headers: () => headers,
+			accepts: acceptsFrom(headers),
+			method: () => "GET",
 		},
 		response: {
 			status(code) {
@@ -74,6 +90,9 @@ function buildCtx(opts: BuildCtxOpts): {
 			},
 			json(data) {
 				response.body = data;
+			},
+			send(body) {
+				response.body = body;
 			},
 		},
 		// Ream (like Adonis) exposes the controller/method under `ctx.route` —
@@ -791,7 +810,7 @@ describe("warden > wardenMiddleware — permission and role checks", () => {
 		},
 	};
 
-	it("returns 403 with the missing permissions list", async () => {
+	it("answers E_AUTHORIZATION_FAILURE without the missing permissions", async () => {
 		class C {
 			@Guard("jwt")
 			@Permission("orders.delete")
@@ -802,15 +821,17 @@ describe("warden > wardenMiddleware — permission and role checks", () => {
 			manager,
 			controller: C.prototype,
 			action: "handler",
-			headers: { authorization: "Bearer ok" },
+			headers: { authorization: "Bearer ok", accept: "application/json" },
 		});
 
 		await wardenMiddleware(ctx, next.fn);
 
 		expect(next.called).toBe(false);
 		expect(response.status).toBe(403);
-		expect(response.body).toMatchObject({
-			error: { code: "E_WARDEN_FORBIDDEN" },
+		expect(response.body).toEqual({ errors: [{ message: "Access denied" }] });
+		expect(handled.get(ctx)).toMatchObject({
+			code: "E_AUTHORIZATION_FAILURE",
+			message: "Access denied",
 		});
 	});
 
@@ -834,7 +855,7 @@ describe("warden > wardenMiddleware — permission and role checks", () => {
 			manager,
 			controller: C.prototype,
 			action: "handler",
-			headers: { authorization: "Bearer ok" },
+			headers: { authorization: "Bearer ok", accept: "application/json" },
 		});
 
 		await wardenMiddleware(ctx, next.fn);
@@ -861,7 +882,7 @@ describe("warden > wardenMiddleware — permission and role checks", () => {
 			manager,
 			controller: C.prototype,
 			action: "handler",
-			headers: { authorization: "Bearer ok" },
+			headers: { authorization: "Bearer ok", accept: "application/json" },
 			registry: {
 				abilities: {},
 				policies: {},
@@ -888,14 +909,16 @@ describe("warden > wardenMiddleware — permission and role checks", () => {
 			manager,
 			controller: C.prototype,
 			action: "handler",
-			headers: { authorization: "Bearer ok" },
+			headers: { authorization: "Bearer ok", accept: "application/json" },
 		});
 
 		await wardenMiddleware(ctx, next.fn);
 		expect(next.called).toBe(false);
 		expect(response.status).toBe(403);
-		expect(response.body).toMatchObject({
-			error: { code: "E_WARDEN_FORBIDDEN" },
+		expect(response.body).toEqual({ errors: [{ message: "Access denied" }] });
+		expect(handled.get(ctx)).toMatchObject({
+			code: "E_AUTHORIZATION_FAILURE",
+			message: "Access denied",
 		});
 	});
 
@@ -913,14 +936,14 @@ describe("warden > wardenMiddleware — permission and role checks", () => {
 			manager,
 			controller: C.prototype,
 			action: "handler",
-			headers: { authorization: "Bearer ok" },
+			headers: { authorization: "Bearer ok", accept: "application/json" },
 		});
 
 		await wardenMiddleware(ctx, next.fn);
 		expect(next.called).toBe(true);
 	});
 
-	it("returns 403 with the missing roles list", async () => {
+	it("answers E_AUTHORIZATION_FAILURE without the missing roles", async () => {
 		class C {
 			@Guard("jwt")
 			@Role("superadmin")
@@ -931,15 +954,48 @@ describe("warden > wardenMiddleware — permission and role checks", () => {
 			manager,
 			controller: C.prototype,
 			action: "handler",
-			headers: { authorization: "Bearer ok" },
+			headers: { authorization: "Bearer ok", accept: "application/json" },
 		});
 
 		await wardenMiddleware(ctx, () => {});
 
 		expect(response.status).toBe(403);
-		expect(response.body).toMatchObject({
-			error: { code: "E_WARDEN_FORBIDDEN" },
+		expect(response.body).toEqual({ errors: [{ message: "Access denied" }] });
+		expect(handled.get(ctx)).toMatchObject({
+			code: "E_AUTHORIZATION_FAILURE",
+			message: "Access denied",
 		});
+	});
+
+	it("translates the refusal through ctx.i18n", async () => {
+		class C {
+			@Guard("jwt")
+			@Role("superadmin")
+			async handler() {}
+		}
+		const manager = makeManager({ jwt: acceptStrategy });
+		const { ctx, response } = buildCtx({
+			manager,
+			controller: C.prototype,
+			action: "handler",
+			headers: { authorization: "Bearer ok", accept: "application/json" },
+		});
+		Reflect.set(ctx, "i18n", {
+			t: (
+				identifier: string,
+				_data: unknown,
+				options?: { defaultValue?: string },
+			) =>
+				identifier === "errors.E_AUTHORIZATION_FAILURE"
+					? "Accès refusé"
+					: (options?.defaultValue ?? identifier),
+		});
+
+		await wardenMiddleware(ctx, () => {});
+
+		expect(response.status).toBe(403);
+		expect(response.body).toEqual({ errors: [{ message: "Accès refusé" }] });
+		expect(handled.get(ctx)).toMatchObject({ code: "E_AUTHORIZATION_FAILURE" });
 	});
 
 	it("requires both permissions AND roles when both are declared (AND gate, not OR)", async () => {
@@ -954,7 +1010,7 @@ describe("warden > wardenMiddleware — permission and role checks", () => {
 			manager,
 			controller: C.prototype,
 			action: "handler",
-			headers: { authorization: "Bearer ok" },
+			headers: { authorization: "Bearer ok", accept: "application/json" },
 		});
 
 		await wardenMiddleware(ctx, next.fn);
@@ -983,11 +1039,102 @@ describe("warden > wardenMiddleware — permission and role checks", () => {
 			manager,
 			controller: C.prototype,
 			action: "handler",
-			headers: { authorization: "Bearer ok" },
+			headers: { authorization: "Bearer ok", accept: "application/json" },
 		});
 
 		await wardenMiddleware(ctx, () => {});
 		expect(response.status).toBe(403);
+	});
+
+	it("throws the refusal for the host's exception handler, as bouncer does", async () => {
+		class C {
+			@Guard("jwt")
+			@Role("superadmin")
+			async handler() {}
+		}
+		const manager = makeManager({ jwt: acceptStrategy });
+		const { ctx, response, next } = buildCtx({
+			manager,
+			controller: C.prototype,
+			action: "handler",
+			headers: { authorization: "Bearer ok" },
+		});
+
+		const refusal = unhandledWardenMiddleware(ctx, next.fn);
+
+		await expect(refusal).rejects.toBeInstanceOf(
+			errors.E_AUTHORIZATION_FAILURE,
+		);
+		await expect(refusal).rejects.toMatchObject({
+			code: "E_AUTHORIZATION_FAILURE",
+			status: 403,
+			message: "Access denied",
+		});
+		expect(next.called).toBe(false);
+		// Nothing is written before the handler renders it.
+		expect(response.status).toBeUndefined();
+		expect(response.body).toBeUndefined();
+	});
+
+	it("throws E_UNAUTHORIZED_ACCESS carrying the guard that refused", async () => {
+		class C {
+			@Guard("jwt")
+			async handler() {}
+		}
+		const manager = makeManager({ jwt: noopJwt });
+		const { ctx, response, next } = buildCtx({
+			manager,
+			controller: C.prototype,
+			action: "handler",
+		});
+
+		const refusal = unhandledWardenMiddleware(ctx, next.fn);
+
+		await expect(refusal).rejects.toBeInstanceOf(errors.E_UNAUTHORIZED_ACCESS);
+		await expect(refusal).rejects.toMatchObject({
+			code: "E_UNAUTHORIZED_ACCESS",
+			status: 401,
+			guardDriverName: "jwt",
+		});
+		expect(next.called).toBe(false);
+		expect(response.status).toBeUndefined();
+	});
+
+	it("flashes a denied form submission and redirects it back", async () => {
+		class C {
+			@Guard("jwt")
+			@Role("superadmin")
+			async handler() {}
+		}
+		const manager = makeManager({ jwt: acceptStrategy });
+		const { ctx } = buildCtx({
+			manager,
+			controller: C.prototype,
+			action: "handler",
+			headers: { authorization: "Bearer ok", accept: "text/html" },
+		});
+		const flashes: unknown[][] = [];
+		let redirectedTo: unknown[] = [];
+		ctx.request.method = () => "POST";
+		ctx.response.redirect = (...args: unknown[]) => {
+			redirectedTo = args;
+		};
+		Reflect.set(ctx, "session", {
+			flash: (...args: unknown[]) => flashes.push(["flash", ...args]),
+			flashExcept: (...args: unknown[]) =>
+				flashes.push(["flashExcept", ...args]),
+			flashErrors: (...args: unknown[]) =>
+				flashes.push(["flashErrors", ...args]),
+		});
+
+		await wardenMiddleware(ctx, () => {});
+
+		expect(flashes).toContainEqual(["flash", "error", "Access denied"]);
+		expect(flashes).toContainEqual([
+			"flashErrors",
+			{ E_AUTHORIZATION_FAILURE: "Access denied" },
+		]);
+		expect(redirectedTo).toEqual(["back", true]);
 	});
 });
 

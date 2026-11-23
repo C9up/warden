@@ -92,12 +92,7 @@ export {
 export { configure } from "./configure.js";
 export type { TokenDuration } from "./duration.js";
 export { parseDurationSeconds } from "./duration.js";
-export {
-	E_AUTHORIZATION_FAILURE,
-	E_INVALID_CREDENTIALS,
-	E_UNAUTHORIZED_ACCESS,
-	WardenError,
-} from "./errors.js";
+export * as errors from "./errors.js";
 export {
 	Guard,
 	getGuardMetadata,
@@ -159,7 +154,6 @@ export type {
 export {
 	MemoryWebauthnChallengeStore,
 	MemoryWebauthnCredentialStore,
-	WebauthnCredentialExistsError,
 	WebauthnProvider,
 } from "./mfa/WebauthnProvider.js";
 export { quasarConnection } from "./quasar.js";

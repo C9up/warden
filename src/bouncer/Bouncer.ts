@@ -12,7 +12,11 @@
  */
 
 import type { UserPayload } from "../AuthManager.js";
-import { WardenError } from "../errors.js";
+import {
+	E_WARDEN_INVALID_ABILITY,
+	E_WARDEN_UNKNOWN_ABILITY,
+	E_WARDEN_UNKNOWN_POLICY,
+} from "../errors.js";
 import {
 	narrowToAccessToken,
 	type RightsResolver,
@@ -180,11 +184,7 @@ export class Bouncer {
 		// `Action` shape (a type guard, not a cast — a function's parameter types
 		// are not observable at runtime).
 		if (!isAction(raw)) {
-			throw new WardenError(
-				"INVALID_ABILITY",
-				"Bouncer.ability requires a callback alongside the options object.",
-				{ hint: "Bouncer.ability({ allowGuest: true }, (user) => ...)" },
-			);
+			throw new E_WARDEN_INVALID_ABILITY();
 		}
 		const callback = raw;
 		const execute = (
@@ -372,11 +372,7 @@ export class Bouncer {
 			? this.#abilities[name]
 			: undefined;
 		if (found === undefined) {
-			throw new WardenError(
-				"UNKNOWN_ABILITY",
-				`No ability "${name}" is registered on this Bouncer.`,
-				{ hint: "Register it via new Bouncer(user, { [name]: ability })." },
-			);
+			throw new E_WARDEN_UNKNOWN_ABILITY([name]);
 		}
 		return found;
 	}
@@ -390,13 +386,7 @@ export class Bouncer {
 				? this.#policies[name]
 				: undefined;
 			if (ctor === undefined) {
-				throw new WardenError(
-					"UNKNOWN_POLICY",
-					`No policy "${name}" is registered on this Bouncer.`,
-					{
-						hint: "Register it via new Bouncer(user, abilities, { [name]: Policy }).",
-					},
-				);
+				throw new E_WARDEN_UNKNOWN_POLICY([name]);
 			}
 			return this.#construct(ctor);
 		};

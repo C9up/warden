@@ -228,10 +228,10 @@ describe("warden > refusing a store that cannot be safe", () => {
 			});
 			throw new Error("it should have refused");
 		} catch (error) {
-			// The hint is where the actionable half lives.
+			// The help is where the actionable half lives.
 			const hint =
 				error !== null && typeof error === "object"
-					? Reflect.get(error, "hint")
+					? Reflect.get(error, "help")
 					: undefined;
 			expect(String(hint)).toMatch(/RETURNING|GETDEL/);
 		}

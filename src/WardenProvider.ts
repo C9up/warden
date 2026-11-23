@@ -1,7 +1,7 @@
 import "./augmentations.js";
 import { AuthManager, type AuthStrategy } from "./AuthManager.js";
 import type { WardenConfig } from "./config.js";
-import { WardenError } from "./errors.js";
+import { E_WARDEN_NO_AUTH_CONFIG } from "./errors.js";
 import { MfaManager } from "./mfa/MfaManager.js";
 import type { BouncerRegistry } from "./middleware.js";
 import { MemoryRightsStore } from "./rights/MemoryRightsStore.js";
@@ -48,10 +48,7 @@ export default class WardenProvider {
 		// middleware loop.
 		const hasGuards = config?.guards && Object.keys(config.guards).length > 0;
 		if (!hasGuards && !config?.jwt && !config?.session && !config?.apiKey) {
-			throw new WardenError(
-				"E_WARDEN_NO_AUTH_CONFIG",
-				`@c9up/warden: no authentication guards configured. Set config.warden.auth.guards (AdonisJS form) or at least one of .jwt / .session / .apiKey in your reamrc.ts before registering WardenProvider.`,
-			);
+			throw new E_WARDEN_NO_AUTH_CONFIG();
 		}
 
 		// Build the guard table. Two accepted forms:

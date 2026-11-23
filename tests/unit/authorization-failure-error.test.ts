@@ -3,11 +3,13 @@
  * identifier, verbatim — carrying the `AuthorizationResponse` it was thrown
  * for, so a handler can read the denial's status, message and translation.
  */
+
+import { Exception } from "@c9up/flare";
 import { describe, expect, it } from "vitest";
 import { AuthorizationResponse } from "../../src/bouncer/AuthorizationResponse.js";
 import { BasePolicy } from "../../src/bouncer/BasePolicy.js";
 import { Bouncer } from "../../src/bouncer/Bouncer.js";
-import { E_AUTHORIZATION_FAILURE, WardenError } from "../../src/errors.js";
+import { E_AUTHORIZATION_FAILURE } from "../../src/errors.js";
 import * as barrel from "../../src/index.js";
 
 async function denial(promise: Promise<void>): Promise<unknown> {
@@ -49,7 +51,7 @@ describe("warden > E_AUTHORIZATION_FAILURE", () => {
 		const error = await denial(bouncer.authorize("edit"));
 
 		expect(error).toBeInstanceOf(E_AUTHORIZATION_FAILURE);
-		expect(error).toBeInstanceOf(WardenError);
+		expect(error).toBeInstanceOf(Exception);
 		if (!(error instanceof E_AUTHORIZATION_FAILURE)) return;
 		expect(error.code).toBe("E_AUTHORIZATION_FAILURE");
 		expect(error.identifier).toBe("errors.E_AUTHORIZATION_FAILURE");
@@ -123,6 +125,6 @@ describe("warden > E_AUTHORIZATION_FAILURE", () => {
 	});
 
 	it("is exported from the barrel", () => {
-		expect(barrel.E_AUTHORIZATION_FAILURE).toBe(E_AUTHORIZATION_FAILURE);
+		expect(barrel.errors.E_AUTHORIZATION_FAILURE).toBe(E_AUTHORIZATION_FAILURE);
 	});
 });

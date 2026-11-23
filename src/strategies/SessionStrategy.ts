@@ -14,7 +14,7 @@ import type {
 	AuthStrategy,
 	UserPayload,
 } from "../AuthManager.js";
-import { WardenError } from "../errors.js";
+import { E_WARDEN_INVALID_CONFIG, E_WARDEN_USE_LOGIN } from "../errors.js";
 import {
 	decodeTokenValue,
 	mintRememberMeToken,
@@ -164,20 +164,18 @@ export class SessionStrategy implements AuthStrategy {
 		// ever caught: the token never expired.
 		const age = config.rememberMeAge;
 		if (age !== undefined && (!Number.isSafeInteger(age) || age <= 0)) {
-			throw new WardenError(
-				"INVALID_CONFIG",
+			throw new E_WARDEN_INVALID_CONFIG([
 				`rememberMeAge must be a positive whole number of seconds, got ${String(age)}`,
-			);
+			]);
 		}
 		const sessionAge = config.sessionAge;
 		if (
 			sessionAge !== undefined &&
 			(!Number.isSafeInteger(sessionAge) || sessionAge <= 0)
 		) {
-			throw new WardenError(
-				"INVALID_CONFIG",
+			throw new E_WARDEN_INVALID_CONFIG([
 				`sessionAge must be a positive whole number of seconds, got ${String(sessionAge)}`,
-			);
+			]);
 		}
 		this.#config = config;
 		this.#sessionKey = config.sessionKey ?? "auth_user_id";
@@ -280,18 +278,12 @@ export class SessionStrategy implements AuthStrategy {
 		_context?: { session?: SessionStore },
 	): Promise<AuthResult> {
 		// Session strategy doesn't handle password verification — that's done
-		// by the caller. We throw a typed sentinel WardenError so AuthManager's
+		// by the caller. We throw a warden error (E_WARDEN_USE_LOGIN) so AuthManager's
 		// try/catch (which swallows generic errors into a soft AuthResult)
 		// re-throws this one — the design boundary stays unmissable even when
 		// a caller routes through `authManager.authenticate()` instead of
 		// `strategy.authenticate()` directly.
-		throw new WardenError(
-			"USE_LOGIN",
-			"SessionStrategy has no credential step. Verify the password yourself, then start the session via authManager.login(user, session) (or ctx.auth.use('session').login(user)).",
-			{
-				hint: "Verify the password yourself (e.g. via @c9up/sigil Hash.verify), then call authManager.login(user, session) — SessionStrategy.login(user, session) also works directly.",
-			},
-		);
+		throw new E_WARDEN_USE_LOGIN();
 	}
 
 	/** Verify session — check if user ID is stored in session. */
@@ -352,11 +344,12 @@ export class SessionStrategy implements AuthStrategy {
 			// Refused rather than signed in: on this store a logout could never
 			// hold — a copy of the cookie, or one re-sent by a request running
 			// across the logout, would stay signed in until it expired.
-			throw new WardenError(
-				"INVALID_CONFIG",
-				"This session store keeps the session in the browser and cannot revoke a sign-in. Give the session guard a `blacklist`, or use a server-side session store (database, redis).",
+			throw Object.assign(
+				new E_WARDEN_INVALID_CONFIG([
+					"This session store keeps the session in the browser and cannot revoke a sign-in. Give the session guard a `blacklist`, or use a server-side session store (database, redis).",
+				]),
 				{
-					hint: "new SessionStrategy({ findUser, blacklist: new TokenBlacklist(new RedisBlacklistDriver(client)) })",
+					help: "new SessionStrategy({ findUser, blacklist: new TokenBlacklist(new RedisBlacklistDriver(client)) })",
 				},
 			);
 		}

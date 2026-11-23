@@ -33,7 +33,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { resolveExpiresInSeconds, type TokenDuration } from "./duration.js";
-import { E_UNAUTHORIZED_ACCESS, WardenError } from "./errors.js";
+import { E_UNAUTHORIZED_ACCESS, E_WARDEN_INVALID_CONFIG } from "./errors.js";
 import {
 	decodeTokenValue,
 	encodeTokenValue,
@@ -180,10 +180,9 @@ export class AccessToken {
 		this.expiresAt = attributes.expiresAt;
 		if (attributes.secret) {
 			if (attributes.prefix === undefined) {
-				throw new WardenError(
-					"INVALID_CONFIG",
+				throw new E_WARDEN_INVALID_CONFIG([
 					"Cannot compute the token value without its prefix.",
-				);
+				]);
 			}
 			this.value = new Secret(
 				`${attributes.prefix}${encodeTokenValue(
@@ -376,19 +375,17 @@ export class AccessTokensProvider implements AccessTokensProviderContract {
 		this.#expiresIn = options.expiresIn;
 		if (this.prefix.length === 0 || this.prefix.includes(".")) {
 			// The value is split on its first dot after the prefix.
-			throw new WardenError(
-				"INVALID_CONFIG",
+			throw new E_WARDEN_INVALID_CONFIG([
 				`The access-token prefix must be non-empty and carry no ".", got ${JSON.stringify(this.prefix)}`,
-			);
+			]);
 		}
 		if (
 			!Number.isSafeInteger(this.tokenSecretLength) ||
 			this.tokenSecretLength < MIN_SECRET_LENGTH
 		) {
-			throw new WardenError(
-				"INVALID_CONFIG",
+			throw new E_WARDEN_INVALID_CONFIG([
 				`tokenSecretLength must be a whole number of at least ${MIN_SECRET_LENGTH}, got ${String(this.tokenSecretLength)}`,
-			);
+			]);
 		}
 		// A lifetime that does not parse fails at boot, not at the first mint.
 		if (this.#expiresIn !== undefined) this.#lifetimeSeconds(this.#expiresIn);

@@ -18,12 +18,19 @@ import {
 	RequireMfa,
 	Role,
 } from "../../src/Guard.js";
-import { type WardenContext, wardenMiddleware } from "../../src/middleware.js";
+import {
+	wardenMiddleware as unhandledWardenMiddleware,
+	type WardenContext,
+} from "../../src/middleware.js";
 import { MemoryRightsStore } from "../../src/rights/MemoryRightsStore.js";
 import { RightsResolver } from "../../src/rights/RightsResolver.js";
 import { Secret } from "../../src/Secret.js";
 import { ApiKeyStrategy } from "../../src/strategies/ApiKeyStrategy.js";
 import { SessionStrategy } from "../../src/strategies/SessionStrategy.js";
+import { withExceptionHandler } from "./support/exceptionHandler.js";
+
+/** The middleware as the host runs it, behind its exception handler. */
+const wardenMiddleware = withExceptionHandler(unhandledWardenMiddleware);
 
 function defined<T>(value: T | null | undefined): T {
 	if (value == null) throw new Error("expected a defined value");

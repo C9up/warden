@@ -11,7 +11,7 @@
  */
 
 import type { AuthManager } from "../AuthManager.js";
-import { WardenError } from "../errors.js";
+import { E_WARDEN_NOT_BOOTED } from "../errors.js";
 
 let instance: AuthManager | undefined;
 
@@ -51,11 +51,7 @@ const auth: AuthManager = new Proxy(target, {
 			return undefined;
 		}
 		if (!instance) {
-			throw new WardenError(
-				"NOT_BOOTED",
-				"[warden] AuthManager singleton accessed before WardenProvider.boot() ran. " +
-					"Check that `@c9up/warden/provider` is listed in your reamrc.ts providers.",
-			);
+			throw new E_WARDEN_NOT_BOOTED();
 		}
 		const value = Reflect.get(instance, prop, instance);
 		return typeof value === "function" ? value.bind(instance) : value;

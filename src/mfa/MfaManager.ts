@@ -12,7 +12,7 @@
 import { randomBytes } from "node:crypto";
 import type { AttemptStore } from "../AttemptStore.js";
 import { AuthRateLimiter } from "../AuthRateLimiter.js";
-import { WardenError } from "../errors.js";
+import { E_WARDEN_INVALID_CONFIG } from "../errors.js";
 import type { BackupCodesProvider } from "./BackupCodesProvider.js";
 import type { TotpProvider } from "./TotpProvider.js";
 
@@ -123,7 +123,7 @@ export class MfaManager {
 
 	constructor(config: MfaManagerConfig) {
 		if (!config?.issuer) {
-			throw new WardenError("INVALID_CONFIG", "MfaManager requires an issuer");
+			throw new E_WARDEN_INVALID_CONFIG(["MfaManager requires an issuer"]);
 		}
 		this.#issuer = config.issuer;
 		this.#totp = config.totp;
@@ -376,20 +376,18 @@ export class MfaManager {
 
 	#requireTotp(): TotpProvider {
 		if (!this.#totp) {
-			throw new WardenError(
-				"INVALID_CONFIG",
+			throw new E_WARDEN_INVALID_CONFIG([
 				"MfaManager has no TotpProvider configured",
-			);
+			]);
 		}
 		return this.#totp;
 	}
 
 	#requireBackupCodes(): BackupCodesProvider {
 		if (!this.#backupCodes) {
-			throw new WardenError(
-				"INVALID_CONFIG",
+			throw new E_WARDEN_INVALID_CONFIG([
 				"MfaManager has no BackupCodesProvider configured",
-			);
+			]);
 		}
 		return this.#backupCodes;
 	}

@@ -14,14 +14,18 @@ import {
 import { Guard } from "../../src/Guard.js";
 import {
 	renderAuthError,
+	wardenMiddleware as unhandledWardenMiddleware,
 	type WardenContext,
-	wardenMiddleware,
 } from "../../src/middleware.js";
 import { MemoryRememberMeTokenDriver } from "../../src/RememberMeToken.js";
 import {
 	type SessionStore,
 	SessionStrategy,
 } from "../../src/strategies/SessionStrategy.js";
+import { withExceptionHandler } from "./support/exceptionHandler.js";
+
+/** The middleware as the host runs it, behind its exception handler. */
+const wardenMiddleware = withExceptionHandler(unhandledWardenMiddleware);
 
 /** Narrow away null/undefined without a `!` assertion (which lies to the compiler). */
 function defined<T>(value: T | null | undefined): T {

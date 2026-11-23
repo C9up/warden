@@ -17,7 +17,10 @@ import {
 } from "../../src/AccessToken.js";
 import { AuthManager, type UserPayload } from "../../src/AuthManager.js";
 import { Guard, RequireMfa } from "../../src/Guard.js";
-import { type WardenContext, wardenMiddleware } from "../../src/middleware.js";
+import {
+	wardenMiddleware as unhandledWardenMiddleware,
+	type WardenContext,
+} from "../../src/middleware.js";
 import { MemoryRememberMeTokenDriver } from "../../src/RememberMeToken.js";
 import { ApiKeyStrategy } from "../../src/strategies/ApiKeyStrategy.js";
 import { BasicAuthStrategy } from "../../src/strategies/BasicAuthStrategy.js";
@@ -25,6 +28,10 @@ import {
 	type SessionStore,
 	SessionStrategy,
 } from "../../src/strategies/SessionStrategy.js";
+import { withExceptionHandler } from "./support/exceptionHandler.js";
+
+/** The middleware as the host runs it, behind its exception handler. */
+const wardenMiddleware = withExceptionHandler(unhandledWardenMiddleware);
 
 /** The row an application's users table hands back: MFA ENABLED, not performed. */
 const mfaEnabledRow = async (id: string | number): Promise<UserPayload> => ({

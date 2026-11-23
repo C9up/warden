@@ -12,6 +12,11 @@ import type {
 } from "../AuthManager.js";
 import { rejectedAsNull } from "../authFinder.js";
 import { resolveExpiresInSeconds, type TokenDuration } from "../duration.js";
+import {
+	E_WARDEN_BLACKLIST_REQUIRED,
+	E_WARDEN_INVALID_CONFIG,
+	E_WARDEN_NAPI_REQUIRED,
+} from "../errors.js";
 import { nativeWarden, nativeWardenLoadError } from "../native.js";
 import type { TokenBlacklist } from "../TokenBlacklist.js";
 
@@ -50,10 +55,7 @@ export interface SignTokenOptions {
 function sign(payload: JwtClaims, secret: string): string {
 	const rust = nativeWarden();
 	if (!rust) {
-		throw new Error(
-			"[E_WARDEN_NAPI_REQUIRED] The Rust warden-engine binary is required. Build it with `cd packages/warden && pnpm build:napi`.",
-			{ cause: nativeWardenLoadError() },
-		);
+		throw new E_WARDEN_NAPI_REQUIRED([], { cause: nativeWardenLoadError() });
 	}
 	return rust.jwtSign(JSON.stringify(payload), secret);
 }
@@ -61,10 +63,7 @@ function sign(payload: JwtClaims, secret: string): string {
 function verify(token: string, secret: string): JwtClaims | null {
 	const rust = nativeWarden();
 	if (!rust) {
-		throw new Error(
-			"[E_WARDEN_NAPI_REQUIRED] The Rust warden-engine binary is required. Build it with `cd packages/warden && pnpm build:napi`.",
-			{ cause: nativeWardenLoadError() },
-		);
+		throw new E_WARDEN_NAPI_REQUIRED([], { cause: nativeWardenLoadError() });
 	}
 	let parsed: unknown;
 	try {
@@ -178,13 +177,15 @@ export class JwtStrategy implements AuthStrategy {
 
 	constructor(config: JwtStrategyConfig) {
 		if (config.secret.length < 32) {
-			throw new Error("JWT secret must be at least 32 characters");
+			throw new E_WARDEN_INVALID_CONFIG([
+				"JWT secret must be at least 32 characters",
+			]);
 		}
 		for (const prev of config.previousSecrets ?? []) {
 			if (prev.length < 32) {
-				throw new Error(
+				throw new E_WARDEN_INVALID_CONFIG([
 					"JWT previousSecrets entries must be at least 32 characters",
-				);
+				]);
 			}
 		}
 		this.#secret = config.secret;
@@ -312,9 +313,7 @@ export class JwtStrategy implements AuthStrategy {
 
 	async revoke(token: string): Promise<boolean> {
 		if (!this.#blacklist) {
-			throw new Error(
-				"JwtStrategy.revoke() requires a `blacklist` driver. Pass `{ blacklist: new TokenBlacklist(driver) }` to the constructor.",
-			);
+			throw new E_WARDEN_BLACKLIST_REQUIRED();
 		}
 		const payload = this.#verifyWithRotation(token);
 		// No jti, nothing to list: verify() refuses such a token anyway once a

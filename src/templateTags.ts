@@ -1,4 +1,4 @@
-import { WardenError } from "./errors.js";
+import { E_WARDEN_TEMPLATE_ENGINE_UNUSABLE } from "./errors.js";
 
 /** The only surface warden needs of a template engine. */
 export interface TemplateEngineLike {
@@ -67,14 +67,8 @@ const loadInker: EnginePackageLoader = () => {
 	return import(/* @vite-ignore */ specifier);
 };
 
-function unusable(detail: string): WardenError {
-	return new WardenError(
-		"E_WARDEN_TEMPLATE_ENGINE_UNUSABLE",
-		`The template engine is installed but @can / @cannot cannot be registered: ${detail}`,
-		{
-			hint: "`@c9up/inker` must default-export its plugin registrar (`inker.use(plugin)`), whose plugins receive an engine with `registerTag()`.",
-		},
-	);
+function unusable(detail: string): E_WARDEN_TEMPLATE_ENGINE_UNUSABLE {
+	return new E_WARDEN_TEMPLATE_ENGINE_UNUSABLE([detail]);
 }
 
 /**

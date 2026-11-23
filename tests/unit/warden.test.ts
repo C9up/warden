@@ -1,4 +1,5 @@
 import "reflect-metadata";
+import { Exception } from "@c9up/flare";
 import { describe, expect, it, vi } from "vitest";
 import {
 	AccessTokensProvider,
@@ -9,6 +10,7 @@ import {
 	ApiKeyStrategy,
 	AuthManager,
 	AuthRateLimiter,
+	errors,
 	Guard,
 	getGuardMetadata,
 	getPermissionMetadata,
@@ -18,7 +20,6 @@ import {
 	Permission,
 	Role,
 	TokenBlacklist,
-	WardenError,
 } from "../../src/index.js";
 import { nativeWarden } from "../../src/native.js";
 
@@ -172,14 +173,50 @@ describe("warden > AuthManager", () => {
 		}
 	});
 
-	it("still rethrows a WardenError from authenticate", async () => {
+	it("reports another package's exception as a crash, even one carrying an upstream code", async () => {
+		// Same code as warden's own 401, thrown by something else: an outage,
+		// not a refusal warden made.
+		const foreign = new Exception("store down", {
+			code: "E_UNAUTHORIZED_ACCESS",
+			status: 403,
+		});
+		const auth = new AuthManager({
+			defaultStrategy: "db",
+			strategies: {
+				db: {
+					name: "db",
+					async authenticate() {
+						throw foreign;
+					},
+					async verify() {
+						throw foreign;
+					},
+				},
+			},
+		});
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(auth.authenticate({})).resolves.toEqual({
+				authenticated: false,
+				strategyCrash: true,
+			});
+			await expect(auth.verify("t")).resolves.toMatchObject({
+				authenticated: false,
+				strategyCrash: true,
+			});
+		} finally {
+			logged.mockRestore();
+		}
+	});
+
+	it("still rethrows a warden error from authenticate", async () => {
 		const auth = new AuthManager({
 			defaultStrategy: "session",
 			strategies: {
 				session: {
 					name: "session",
 					async authenticate() {
-						throw new WardenError("USE_LOGIN", "use login()");
+						throw new errors.E_WARDEN_USE_LOGIN();
 					},
 					async verify() {
 						return { authenticated: false };
@@ -596,6 +633,28 @@ describe("warden > security hardening", () => {
 					verifyCredentials: async () => null,
 				}),
 		).toThrow(/previousSecrets/);
+	});
+
+	it("JwtStrategy rejects a secret shorter than 32 chars, with a code", () => {
+		expect(
+			() =>
+				new JwtStrategy({
+					secret: "short",
+					findUser: async (id) => ({ id }),
+					verifyCredentials: async () => null,
+				}),
+		).toThrow(expect.objectContaining({ code: "E_WARDEN_INVALID_CONFIG" }));
+	});
+
+	it("JwtStrategy.revoke refuses without a blacklist driver", async () => {
+		const jwt = new JwtStrategy({
+			secret: "x".repeat(32),
+			findUser: async (id) => ({ id }),
+			verifyCredentials: async () => ({ id: "u1" }),
+		});
+		await expect(jwt.revoke(jwt.signToken({ id: "u1" }))).rejects.toMatchObject(
+			{ code: "E_WARDEN_BLACKLIST_REQUIRED" },
+		);
 	});
 
 	it("JwtStrategy emits a unique jti on every signToken", async () => {

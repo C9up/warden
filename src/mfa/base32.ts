@@ -3,6 +3,8 @@
  * TOTP secrets. Kept dependency-free and local to the MFA subsystem.
  */
 
+import { E_WARDEN_INVALID_TOTP_SECRET } from "../errors.js";
+
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const CHAR_TO_VAL: Record<string, number> = {};
 for (const [i, char] of [...ALPHABET].entries()) {
@@ -41,7 +43,7 @@ export function base32Decode(input: string): Uint8Array {
 	for (const ch of clean) {
 		const v = CHAR_TO_VAL[ch];
 		if (v === undefined) {
-			throw new Error(`Invalid base32 character: ${ch}`);
+			throw new E_WARDEN_INVALID_TOTP_SECRET([ch]);
 		}
 		value = (value << 5) | v;
 		bits += 5;

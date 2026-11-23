@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { UserPayload } from "../../src/AuthManager.js";
 import { AuthorizationResponse } from "../../src/bouncer/AuthorizationResponse.js";
 import { Bouncer } from "../../src/bouncer/Bouncer.js";
-import { WardenError } from "../../src/errors.js";
+import { E_AUTHORIZATION_FAILURE } from "../../src/errors.js";
 
 function user(overrides: Partial<UserPayload> = {}): UserPayload {
 	return { id: "u1", ...overrides };
@@ -65,8 +65,8 @@ describe("warden > bouncer > abilities", () => {
 		} catch (error) {
 			thrown = error;
 		}
-		expect(thrown).toBeInstanceOf(WardenError);
-		if (thrown instanceof WardenError) {
+		expect(thrown).toBeInstanceOf(E_AUTHORIZATION_FAILURE);
+		if (thrown instanceof E_AUTHORIZATION_FAILURE) {
 			expect(thrown.code).toBe("E_AUTHORIZATION_FAILURE");
 			expect(thrown.status).toBe(403);
 		}
@@ -82,8 +82,8 @@ describe("warden > bouncer > abilities", () => {
 		} catch (error) {
 			thrown = error;
 		}
-		expect(thrown).toBeInstanceOf(WardenError);
-		if (thrown instanceof WardenError) {
+		expect(thrown).toBeInstanceOf(E_AUTHORIZATION_FAILURE);
+		if (thrown instanceof E_AUTHORIZATION_FAILURE) {
 			expect(thrown.message).toBe("forbidden");
 			expect(thrown.status).toBe(451);
 		}

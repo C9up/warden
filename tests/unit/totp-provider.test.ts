@@ -105,6 +105,16 @@ describe("warden > TotpProvider", () => {
 		expect(await totp.verify(secret, spaced)).toBe(true);
 	});
 
+	it("refuses a stored secret that is not base32", async () => {
+		const totp = new TotpProvider();
+		await expect(totp.verify("NOT-BASE32!", "123456")).rejects.toMatchObject({
+			code: "E_WARDEN_INVALID_TOTP_SECRET",
+		});
+		expect(() => totp.generate("1111")).toThrow(
+			expect.objectContaining({ code: "E_WARDEN_INVALID_TOTP_SECRET" }),
+		);
+	});
+
 	it("rejects an out-of-range digit count at construction", () => {
 		expect(() => new TotpProvider({ digits: 9 })).toThrow(
 			/TOTP digits must be a whole number from 6 to 8/,

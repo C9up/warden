@@ -14,7 +14,12 @@ import {
 	randomInt,
 	timingSafeEqual,
 } from "node:crypto";
-import { WardenError } from "../errors.js";
+import {
+	E_WARDEN_INVALID_CONFIG,
+	E_WARDEN_OTP_STORE_CONTRACT,
+	E_WARDEN_OTP_STORE_FULL,
+	E_WARDEN_STORE_LIMIT_INVALID,
+} from "../errors.js";
 
 /** Sends the code to the user. Implemented by the consuming app (email/SMS). */
 export interface OtpDeliveryChannel {
@@ -91,13 +96,7 @@ export class MemoryOtpChallengeStore implements OtpChallengeStore {
 		// exists to provide, silently. A caller asking for one of those means
 		// something, and none of the meanings is what would have happened.
 		if (!Number.isInteger(maxEntries) || maxEntries < 1) {
-			throw new WardenError(
-				"E_WARDEN_STORE_LIMIT_INVALID",
-				`maxEntries must be a positive integer, got ${String(maxEntries)}.`,
-				{
-					hint: "Pass the number of pending entries this process may hold — the default is 10_000.",
-				},
-			);
+			throw new E_WARDEN_STORE_LIMIT_INVALID([String(maxEntries)]);
 		}
 		this.#maxEntries = maxEntries;
 	}
@@ -111,13 +110,7 @@ export class MemoryOtpChallengeStore implements OtpChallengeStore {
 			// REFUSED, not evicted. Evicting to make room lets whoever is
 			// flooding push a legitimate user's challenge out and lock them out;
 			// refusing the new one fails the attacker instead.
-			throw new WardenError(
-				"E_WARDEN_OTP_STORE_FULL",
-				`The in-memory OTP store is full (${this.#maxEntries} pending challenges).`,
-				{
-					hint: "Rate-limit the endpoint that mints codes, or move to a persistent store with its own TTL.",
-				},
-			);
+			throw new E_WARDEN_OTP_STORE_FULL([this.#maxEntries]);
 		}
 		this.#store.set(c.id, c);
 		if (this.#store.size > this.#sweepAt) this.#sweep();
@@ -194,19 +187,12 @@ export class OtpProvider {
 		// is refused here, where the fix is obvious.
 		const store = config.store;
 		if (store !== undefined && typeof store.take !== "function") {
-			throw new WardenError(
-				"E_WARDEN_OTP_STORE_CONTRACT",
-				"The OTP challenge store does not implement take().",
-				{
-					hint: "take(id) must remove the challenge AND return it in ONE indivisible operation — `DELETE ... RETURNING` on SQL, GETDEL or a Lua script on Redis. Reading then deleting separately lets two requests with the same correct code both succeed.",
-				},
-			);
+			throw new E_WARDEN_OTP_STORE_CONTRACT();
 		}
 		if (!config?.channel) {
-			throw new WardenError(
-				"INVALID_CONFIG",
+			throw new E_WARDEN_INVALID_CONFIG([
 				"OtpProvider requires a delivery channel (email/SMS)",
-			);
+			]);
 		}
 		this.#channel = config.channel;
 		this.#store = config.store ?? new MemoryOtpChallengeStore();
@@ -219,24 +205,21 @@ export class OtpProvider {
 		// challenge on the first guess.
 		const digits = config.digits ?? 6;
 		if (!Number.isInteger(digits) || digits < 4 || digits > 10) {
-			throw new WardenError(
-				"INVALID_CONFIG",
+			throw new E_WARDEN_INVALID_CONFIG([
 				`OTP digits must be an integer 4-10, got ${digits}`,
-			);
+			]);
 		}
 		const ttlSeconds = config.ttlSeconds ?? 300;
 		if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1) {
-			throw new WardenError(
-				"INVALID_CONFIG",
+			throw new E_WARDEN_INVALID_CONFIG([
 				`OTP ttlSeconds must be a positive integer, got ${ttlSeconds}`,
-			);
+			]);
 		}
 		const maxAttempts = config.maxAttempts ?? 5;
 		if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
-			throw new WardenError(
-				"INVALID_CONFIG",
+			throw new E_WARDEN_INVALID_CONFIG([
 				`OTP maxAttempts must be a positive integer, got ${maxAttempts}`,
-			);
+			]);
 		}
 		this.#digits = digits;
 		this.#ttlMs = ttlSeconds * 1000;

@@ -7,7 +7,7 @@
  */
 
 import type { UserPayload } from "../AuthManager.js";
-import { WardenError } from "../errors.js";
+import { E_WARDEN_UNKNOWN_POLICY_ACTION } from "../errors.js";
 import type { EffectivePermissions, Scope } from "../rights/types.js";
 import type { AuthorizationResponse } from "./AuthorizationResponse.js";
 import { BasePolicy } from "./BasePolicy.js";
@@ -57,11 +57,7 @@ function resolveActionMethod(policy: BasePolicy, action: string): Action {
 		declaredHere = false;
 	}
 	if (!declaredHere || !isAction(candidate)) {
-		throw new WardenError(
-			"UNKNOWN_POLICY_ACTION",
-			`Policy "${policy.constructor.name}" has no action "${action}"`,
-			{ hint: "Declare the action as a method on the policy class." },
-		);
+		throw new E_WARDEN_UNKNOWN_POLICY_ACTION([policy.constructor.name, action]);
 	}
 	return candidate.bind(policy);
 }

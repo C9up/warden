@@ -21,7 +21,7 @@
 
 import { createHash } from "node:crypto";
 import { type AttemptStore, MemoryAttemptStore } from "./AttemptStore.js";
-import { WardenError } from "./errors.js";
+import { E_WARDEN_INVALID_CONFIG } from "./errors.js";
 
 export interface AuthRateLimiterConfig {
 	/** Attempts allowed per window, per key. Default 5. */
@@ -117,10 +117,9 @@ export class AuthRateLimiter {
  */
 function positiveInteger(field: string, value: number): number {
 	if (!Number.isSafeInteger(value) || value <= 0) {
-		throw new WardenError(
-			"INVALID_CONFIG",
+		throw new E_WARDEN_INVALID_CONFIG([
 			`AuthRateLimiter ${field} must be a positive whole number, got ${String(value)}`,
-		);
+		]);
 	}
 	return value;
 }

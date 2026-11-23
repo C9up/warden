@@ -21,7 +21,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { WardenError } from "./errors.js";
+import { E_WARDEN_TOKEN_TTL_INVALID } from "./errors.js";
 import { hashSecret } from "./RememberMeToken.js";
 
 export interface StoredRefreshToken {
@@ -111,11 +111,12 @@ export function mintRefreshToken(
 ): MintedRefreshToken {
 	// NaN or Infinity is not a lifetime: the row would never expire.
 	if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
-		throw new WardenError(
-			"E_WARDEN_TOKEN_TTL_INVALID",
-			`ttlSeconds must be a positive finite number, got ${String(ttlSeconds)}.`,
+		throw Object.assign(
+			new E_WARDEN_TOKEN_TTL_INVALID([
+				`ttlSeconds must be a positive finite number, got ${String(ttlSeconds)}.`,
+			]),
 			{
-				hint: "Give the refresh token a lifetime in seconds, e.g. 2592000 (30 days).",
+				help: "Give the refresh token a lifetime in seconds, e.g. 2592000 (30 days).",
 			},
 		);
 	}

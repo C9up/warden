@@ -15,7 +15,10 @@ import {
 } from "../../src/AccessToken.js";
 import { Authenticator } from "../../src/Authenticator.js";
 import { AuthManager, type UserPayload } from "../../src/AuthManager.js";
-import { E_UNAUTHORIZED_ACCESS, WardenError } from "../../src/errors.js";
+import {
+	E_UNAUTHORIZED_ACCESS,
+	E_WARDEN_STRATEGY_CANNOT_ISSUE,
+} from "../../src/errors.js";
 import type { WardenContext } from "../../src/middleware.js";
 import { ApiKeyStrategy } from "../../src/strategies/ApiKeyStrategy.js";
 import {
@@ -222,9 +225,7 @@ describe("warden > Authenticator upstream surface", () => {
 		const user: UserPayload = { id: "u1" };
 
 		const error = await rejection(auth.use("web").createToken(user));
-		expect(error).toBeInstanceOf(WardenError);
-		if (error instanceof WardenError) {
-			expect(error.code).toBe("E_WARDEN_STRATEGY_CANNOT_ISSUE");
-		}
+		expect(error).toBeInstanceOf(E_WARDEN_STRATEGY_CANNOT_ISSUE);
+		expect(error).toMatchObject({ code: "E_WARDEN_STRATEGY_CANNOT_ISSUE" });
 	});
 });

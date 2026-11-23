@@ -8,6 +8,10 @@
  * them — stays here, because that is the part a reader needs.
  */
 
+import {
+	E_WARDEN_INCOMPLETE_CONNECTION,
+	E_WARDEN_QUASAR_MISSING,
+} from "./errors.js";
 import type { RedisLikeClient } from "./RedisBlacklistDriver.js";
 import {
 	hasCommands,
@@ -38,6 +42,9 @@ export function quasarConnection(
 			required: REQUIRED,
 			isConnection: isRedisLikeClient,
 			what: "the token blacklist",
-			raise: (_reason, message, cause) => new Error(message, { cause }),
+			raise: (reason, message, cause) =>
+				reason === "quasar-missing"
+					? new E_WARDEN_QUASAR_MISSING([message], { cause })
+					: new E_WARDEN_INCOMPLETE_CONNECTION([message], { cause }),
 		});
 }

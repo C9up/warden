@@ -6,7 +6,7 @@
 import { inspect } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { AuthManager, type AuthStrategy } from "../../src/AuthManager.js";
-import { WardenError } from "../../src/errors.js";
+import { E_WARDEN_NOT_BOOTED } from "../../src/errors.js";
 import auth, { clearAuth, setAuth } from "../../src/services/main.js";
 
 const guard: AuthStrategy = {
@@ -43,7 +43,7 @@ describe("warden > services/main", () => {
 		} catch (error) {
 			caught = error;
 		}
-		expect(caught).toBeInstanceOf(WardenError);
+		expect(caught).toBeInstanceOf(E_WARDEN_NOT_BOOTED);
 		expect(caught).toMatchObject({ code: "E_WARDEN_NOT_BOOTED" });
 		expect(() => auth.verify).toThrow(/WardenProvider\.boot\(\)/);
 	});
