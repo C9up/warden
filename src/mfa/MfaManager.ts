@@ -12,7 +12,7 @@
 import { randomBytes } from "node:crypto";
 import type { AttemptStore } from "../AttemptStore.js";
 import { AuthRateLimiter } from "../AuthRateLimiter.js";
-import { E_WARDEN_INVALID_CONFIG } from "../errors.js";
+import { E_WARDEN_INVALID_CONFIG, E_WARDEN_MFA_REQUIRED } from "../errors.js";
 import type { BackupCodesProvider } from "./BackupCodesProvider.js";
 import type { TotpProvider } from "./TotpProvider.js";
 
@@ -114,6 +114,30 @@ export interface MfaManagerConfig {
 	rateLimit?: MfaRateLimitConfig;
 }
 
+/**
+ * How a request that changes a user's factors authenticated.
+ *
+ * Once an account has a confirmed factor, adding, replacing or removing one
+ * needs the step-up: without it a session opened with the password alone
+ * could mint fresh backup codes, enrol its own authenticator or remove the
+ * owner's, and the second factor would protect nothing. Before the first
+ * factor is confirmed there is nothing to step up with, so the change is
+ * allowed.
+ */
+export interface MfaChangeOptions {
+	/**
+	 * Whether the request completed the MFA step-up: `ctx.auth.user.mfa ===
+	 * true`, which the guard sets from the credential. Absent means no.
+	 */
+	stepUp?: boolean;
+}
+
+/** {@link MfaChangeOptions} for a call that creates a factor. */
+export interface MfaEnrollOptions extends MfaChangeOptions {
+	/** A name the user gives the factor ("iPhone", "Yubikey"). */
+	label?: string;
+}
+
 export class MfaManager {
 	readonly #issuer: string;
 	readonly #totp?: TotpProvider;
@@ -142,12 +166,17 @@ export class MfaManager {
 	 * Begin TOTP enrollment: persist a pending factor and return the secret +
 	 * `otpauth://` URI to show as a QR code. The factor is unusable until
 	 * `confirmTotp()` succeeds.
+	 *
+	 * Throws `E_WARDEN_MFA_REQUIRED` when the account already has a confirmed
+	 * factor and `options.stepUp` is not `true`.
 	 */
 	async enrollTotp(
 		user: { id: string; name: string },
-		label?: string,
+		options: MfaEnrollOptions = {},
 	): Promise<{ factorId: string; secret: string; uri: string }> {
 		const totp = this.#requireTotp();
+		await this.#requireStepUp(user.id, options);
+		const label = options.label;
 		const { secret, uri } = totp.enroll(user.name, this.#issuer);
 		const factor: MfaFactor = {
 			id: newId(),
@@ -169,13 +198,18 @@ export class MfaManager {
 	 * a request, and one leaked through a log or a support tool must not let
 	 * another account act on it. The attempt counts against the same lockout
 	 * as {@link verify}, so the first code cannot be guessed without limit.
+	 *
+	 * Throws `E_WARDEN_MFA_REQUIRED` when the account already has a confirmed
+	 * factor and `options.stepUp` is not `true`.
 	 */
 	async confirmTotp(
 		userId: string,
 		factorId: string,
 		code: string,
+		options: MfaChangeOptions = {},
 	): Promise<boolean> {
 		const totp = this.#requireTotp();
+		await this.#requireStepUp(userId, options);
 		const key = lockoutKey(userId);
 		if (!(await this.#limiter.attempt(key)).allowed) {
 			return false;
@@ -232,9 +266,17 @@ export class MfaManager {
 	 * Generate (or regenerate) the user's backup codes. Returns the plaintext
 	 * codes to display ONCE; only hashes are stored. Any prior backup-code
 	 * factor is replaced.
+	 *
+	 * Throws `E_WARDEN_MFA_REQUIRED` when the account already has a confirmed
+	 * factor and `options.stepUp` is not `true`.
 	 */
-	async createBackupCodes(userId: string, label?: string): Promise<string[]> {
+	async createBackupCodes(
+		userId: string,
+		options: MfaEnrollOptions = {},
+	): Promise<string[]> {
 		const provider = this.#requireBackupCodes();
+		await this.#requireStepUp(userId, options);
+		const label = options.label;
 		const existing = await this.#store.findByUser(userId);
 		for (const f of existing) {
 			if (f.kind === "backup_codes") {
@@ -357,12 +399,33 @@ export class MfaManager {
 	 * Remove one of `userId`'s factors (e.g. the user disables their
 	 * authenticator). Answers whether a factor was removed: `false` for an
 	 * unknown id or one owned by another user, which is left in place.
+	 *
+	 * Throws `E_WARDEN_MFA_REQUIRED` when the account has a confirmed factor
+	 * and `options.stepUp` is not `true`.
 	 */
-	async disableFactor(userId: string, factorId: string): Promise<boolean> {
+	async disableFactor(
+		userId: string,
+		factorId: string,
+		options: MfaChangeOptions = {},
+	): Promise<boolean> {
+		await this.#requireStepUp(userId, options);
 		const factor = await this.#ownedFactor(userId, factorId);
 		if (factor === null) return false;
 		await this.#store.delete(factor.id);
 		return true;
+	}
+
+	/**
+	 * Refuse a change to the factors of an account that has a confirmed one,
+	 * unless the request stepped up. Checked before anything is read or
+	 * written, so a refused call leaves no trace.
+	 */
+	async #requireStepUp(
+		userId: string,
+		options: MfaChangeOptions,
+	): Promise<void> {
+		if (options.stepUp === true) return;
+		if (await this.isEnabled(userId)) throw new E_WARDEN_MFA_REQUIRED();
 	}
 
 	/** The factor, only when it belongs to `userId`. */

@@ -212,9 +212,12 @@ export const E_WARDEN_INVALID_TOTP_SECRET = createError<[unknown]>(
 	"E_WARDEN_INVALID_TOTP_SECRET",
 );
 
-/** The Rust JWT engine is not loaded. */
-export const E_WARDEN_NAPI_REQUIRED = createError(
-	"The Rust warden-engine binary is required. Build it with `cd packages/warden && pnpm build:napi`.",
+/**
+ * The Rust JWT engine is not loaded. The message names the platform package
+ * to install; the load error is its `cause`.
+ */
+export const E_WARDEN_NAPI_REQUIRED = createError<[fix: string]>(
+	"The Rust warden-engine binary is required.\n  Fix: %s",
 	"E_WARDEN_NAPI_REQUIRED",
 );
 
@@ -248,6 +251,62 @@ export class E_WARDEN_OTP_STORE_CONTRACT extends createError(
 ) {
 	static override help =
 		"take(id) must remove the challenge AND return it in ONE indivisible operation — `DELETE ... RETURNING` on SQL, GETDEL or a Lua script on Redis. Reading then deleting separately lets two requests with the same correct code both succeed.";
+}
+
+/** The refresh token store cannot rotate: no `consume()` or no `revokeFamily()`. */
+export class E_WARDEN_REFRESH_STORE_CONTRACT extends createError(
+	"The refresh token store does not implement consume() and revokeFamily().",
+	"E_WARDEN_REFRESH_STORE_CONTRACT",
+) {
+	static override help =
+		"consume(familyId, presentedHash, successor) must replace the family's hash ONLY if it is still the one presented, in ONE indivisible operation — `UPDATE ... WHERE family_id = ? AND hash = ?` and the affected row count on SQL, a Lua script on Redis — and revokeFamily(familyId) must remove the family's row. Reading then writing separately lets two requests redeem the same refresh token.";
+}
+
+/**
+ * `E_WARDEN_MFA_REQUIRED` — the request did not complete the MFA step-up and
+ * the operation needs it: a change to the factors of an account that already
+ * has a confirmed one (`MfaManager`). Status 403.
+ *
+ * Same code, status, message and body as the refusal of a `@RequireMfa()`
+ * route, so an application branches on one code whichever raised it.
+ */
+export class E_WARDEN_MFA_REQUIRED extends Exception {
+	static override status = 403;
+	static override code = "E_WARDEN_MFA_REQUIRED";
+	static override message =
+		"Multi-factor authentication is required for this action.";
+
+	/** Write the refusal: `403 { error: { code, message } }`. */
+	async handle(
+		error: E_WARDEN_MFA_REQUIRED,
+		ctx: {
+			response: { status(code: number): unknown; json(data: unknown): void };
+		},
+	): Promise<void> {
+		ctx.response.status(error.status);
+		ctx.response.json({
+			error: {
+				code: error.code ?? E_WARDEN_MFA_REQUIRED.code,
+				message: error.message,
+			},
+		});
+	}
+}
+
+/**
+ * `@Guard()`, `@Role()` or `@Permission()` names nothing to require. Thrown
+ * when the decorator is applied, and by warden's middleware for an action
+ * whose metadata names nothing: an empty requirement would leave the action
+ * open to every request.
+ */
+export class E_WARDEN_EMPTY_GATE_REQUIREMENT extends createError<
+	[action: string, decorator: string]
+>(
+	"%s: %s names nothing to require, so it would leave the action open to every request.",
+	"E_WARDEN_EMPTY_GATE_REQUIREMENT",
+) {
+	static override help =
+		"Name at least one guard, role or permission — `@Guard('jwt')`, `@Role('admin')` — or remove the decorator. A list read from configuration must not be empty.";
 }
 
 /** The in-memory OTP store holds its maximum of pending challenges. */

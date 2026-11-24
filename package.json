@@ -8,10 +8,10 @@
   "types": "./src/index.ts",
   "files": [
     "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
     "README.md",
     "dist",
     "stubs",
-    "index.*.node",
     "src"
   ],
   "exports": {
@@ -69,6 +69,8 @@
     "build:rust": "cargo build --locked --release -p warden-engine-napi",
     "build:napi": "pnpm build:rust && pnpm build:napi-types && node scripts/copy-napi.mjs",
     "build:napi-types": "node scripts/build-napi-types.mjs",
+    "platforms:sync": "node scripts/platform-packages.mjs",
+    "platforms:check": "node scripts/platform-packages.mjs --check",
     "test": "vitest run",
     "test:rust": "cargo test --locked -p warden-engine",
     "lint": "biome check src/ tests/",
@@ -80,11 +82,19 @@
   "dependencies": {
     "@c9up/flare": "^0.1.0"
   },
+  "optionalDependencies": {
+    "@c9up/warden-linux-x64-gnu": "0.2.8",
+    "@c9up/warden-linux-arm64-gnu": "0.2.8",
+    "@c9up/warden-darwin-x64": "0.2.8",
+    "@c9up/warden-darwin-arm64": "0.2.8",
+    "@c9up/warden-win32-x64-msvc": "0.2.8"
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.6.8",
     "@c9up/inker": "^0.1.20",
     "@c9up/quasar": "^0.1.0 || ^0.2.0",
     "@c9up/ream": "^0.2.32",
+    "@c9up/sigil": "^0.1.20",
     "@types/node": "^22.20.1",
     "@vitest/coverage-v8": "4.1.12",
     "reflect-metadata": "^0.2.2",

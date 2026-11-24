@@ -5,8 +5,8 @@
  * The attack: a login endpoint that returns early for an unknown account
  * answers in microseconds, and one that hashes for a known account answers in
  * ~100 ms, so an anonymous caller enumerates registered emails by timing.
- * The proof here is cost, not wall-clock: an unknown uid pays exactly the one
- * hash a known uid pays, and every failure raises the same error.
+ * The proof here is cost, not wall-clock: an unknown uid runs exactly the one
+ * verification a known uid runs, and every failure raises the same error.
  */
 import { describe, expect, it } from "vitest";
 import { AuthManager } from "../../src/AuthManager.js";
@@ -68,18 +68,23 @@ describe("warden > authFinder.verifyCredentials", () => {
 		expect(user.id).toBe("1");
 	});
 
-	it("pays one hash for an unknown uid, as a known uid does", async () => {
+	it("runs for an unknown uid the one verification a known uid runs", async () => {
 		const { hash, users } = setup();
 
 		await failure(users.verifyCredentials("known@example.com", "wrong"));
 		const known = [...hash.calls];
 		hash.calls.length = 0;
 		await failure(users.verifyCredentials("nobody@example.com", "wrong"));
+		const first = [...hash.calls];
+		hash.calls.length = 0;
+		await failure(users.verifyCredentials("nobody@example.com", "wrong"));
 		const unknown = [...hash.calls];
 
 		expect(known).toEqual(["verify"]);
+		// The decoy hash is made once, by the first sign-in that needs it.
+		expect(first).toEqual(["make", "verify"]);
 		// The early return used to do no hash work at all here.
-		expect(unknown).toHaveLength(1);
+		expect(unknown).toEqual(["verify"]);
 	});
 
 	it("raises E_INVALID_CREDENTIALS for every failure, indistinguishably", async () => {
@@ -99,10 +104,37 @@ describe("warden > authFinder.verifyCredentials", () => {
 		}
 	});
 
-	it("an account with no password hash still pays one hash and fails", async () => {
+	it("an account with no password hash still runs one verification and fails", async () => {
 		const { hash, users } = setup();
+		await failure(users.verifyCredentials("nobody@example.com", "warm-up"));
+		hash.calls.length = 0;
 		await failure(users.verifyCredentials("sso@example.com", "anything"));
-		expect(hash.calls).toHaveLength(1);
+		expect(hash.calls).toEqual(["verify"]);
+	});
+
+	it("never authenticates on the decoy, even with a hasher that says yes", async () => {
+		const users = authFinder({
+			hash: {
+				make: async (value: string) => `hashed:${value}`,
+				verify: async () => true,
+			},
+			findForAuth: async (uid: string): Promise<Row | null> =>
+				uid === "sso@example.com"
+					? { id: "2", email: uid, password: null }
+					: null,
+		});
+		expect(
+			await failure(users.verifyCredentials("nobody@example.com", "x")),
+		).toBeInstanceOf(E_INVALID_CREDENTIALS);
+		expect(
+			await failure(users.verifyCredentials("sso@example.com", "x")),
+		).toBeInstanceOf(E_INVALID_CREDENTIALS);
+		expect(
+			await users.verifyPassword(
+				{ id: "2", email: "sso@example.com", password: null },
+				"x",
+			),
+		).toBe(false);
 	});
 
 	it("verifyPassword checks a known user's password", async () => {
@@ -127,6 +159,128 @@ describe("warden > authFinder.verifyCredentials", () => {
 
 	it("is exported from the barrel", () => {
 		expect(barrel.authFinder).toBe(authFinder);
+	});
+});
+
+describe("warden > authFinder with a hasher that throws", () => {
+	const rows: Row[] = [
+		{ id: "1", email: "known@example.com", password: "hashed:secret" },
+		{ id: "2", email: "sso@example.com", password: null },
+	];
+	const findForAuth = async (uid: string) =>
+		rows.find((row) => row.email === uid) ?? null;
+	const uids = ["known@example.com", "sso@example.com", "nobody@example.com"];
+
+	/** A hasher whose `make` AND `verify` throw on a password over 8 chars. */
+	function strictHasher() {
+		const calls: string[] = [];
+		const refuse = (value: string) => {
+			if (value.length > 8 && !value.startsWith("hashed:")) {
+				throw new Error("password too long for this hasher");
+			}
+		};
+		return {
+			calls,
+			async make(value: string) {
+				calls.push("make");
+				// The decoy password is 43 chars: a real hasher accepts it.
+				if (value.length !== 43) refuse(value);
+				return `hashed:${value}`;
+			},
+			async verify(hashed: string, plain: string) {
+				calls.push("verify");
+				if (plain.length !== 43) refuse(plain);
+				return hashed === `hashed:${plain}`;
+			},
+		};
+	}
+
+	it("a password the hasher refuses is a wrong password on every branch, at the same cost", async () => {
+		const hash = strictHasher();
+		const users = authFinder({ hash, findForAuth });
+		await failure(users.verifyCredentials("nobody@example.com", "warm-up"));
+
+		const seen: string[][] = [];
+		for (const uid of uids) {
+			hash.calls.length = 0;
+			const error = await failure(
+				users.verifyCredentials(uid, "far-too-long-a-password"),
+			);
+			expect(error).toBeInstanceOf(E_INVALID_CREDENTIALS);
+			seen.push([...hash.calls]);
+		}
+		// The refused verification, then the hasher verifying its own decoy.
+		expect(seen).toEqual([
+			["verify", "verify"],
+			["verify", "verify"],
+			["verify", "verify"],
+		]);
+		const known = rows[0];
+		if (known === undefined) throw new Error("fixture row missing");
+		expect(await users.verifyPassword(known, "far-too-long-a-password")).toBe(
+			false,
+		);
+		// And the hasher still signs the right password in.
+		expect((await users.verifyCredentials(known.email, "secret")).id).toBe("1");
+	});
+
+	it("a hasher out of service stays a crash on every branch", async () => {
+		const outage = new Error("native binary missing");
+		const users = authFinder({
+			hash: {
+				make: async () => {
+					throw outage;
+				},
+				verify: async () => {
+					throw outage;
+				},
+			},
+			findForAuth,
+		});
+		for (const uid of uids) {
+			expect(await failure(users.verifyCredentials(uid, "secret"))).toBe(
+				outage,
+			);
+		}
+	});
+
+	it("a hasher that cannot verify its own decoy is out of service too", async () => {
+		const broken = new Error("verify is broken");
+		const users = authFinder({
+			hash: {
+				make: async (value: string) => `hashed:${value}`,
+				verify: async () => {
+					throw broken;
+				},
+			},
+			findForAuth,
+		});
+		expect(
+			await failure(users.verifyCredentials("known@example.com", "secret")),
+		).toBe(broken);
+	});
+
+	it("asks for the decoy again after the hasher comes back", async () => {
+		let down = true;
+		const users = authFinder({
+			hash: {
+				make: async (value: string) => {
+					if (down) throw new Error("down");
+					return `hashed:${value}`;
+				},
+				verify: async (hashed: string, plain: string) =>
+					hashed === `hashed:${plain}`,
+			},
+			findForAuth,
+		});
+		const first = await failure(
+			users.verifyCredentials("nobody@example.com", "secret"),
+		);
+		expect(first).not.toBeInstanceOf(E_INVALID_CREDENTIALS);
+		down = false;
+		expect(
+			await failure(users.verifyCredentials("nobody@example.com", "secret")),
+		).toBeInstanceOf(E_INVALID_CREDENTIALS);
 	});
 });
 

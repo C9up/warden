@@ -17,7 +17,11 @@ import {
 	E_WARDEN_INVALID_CONFIG,
 	E_WARDEN_NAPI_REQUIRED,
 } from "../errors.js";
-import { nativeWarden, nativeWardenLoadError } from "../native.js";
+import {
+	type NativeWarden,
+	nativeWarden,
+	nativeWardenUnavailable,
+} from "../native.js";
 import type { TokenBlacklist } from "../TokenBlacklist.js";
 
 /**
@@ -52,19 +56,20 @@ export interface SignTokenOptions {
 	mfa?: boolean;
 }
 
-function sign(payload: JwtClaims, secret: string): string {
+/** The engine, or the refusal naming what to install. */
+function engine(): NativeWarden {
 	const rust = nativeWarden();
-	if (!rust) {
-		throw new E_WARDEN_NAPI_REQUIRED([], { cause: nativeWardenLoadError() });
-	}
-	return rust.jwtSign(JSON.stringify(payload), secret);
+	if (rust !== undefined) return rust;
+	const why = nativeWardenUnavailable();
+	throw new E_WARDEN_NAPI_REQUIRED([why.fix], { cause: why.cause });
+}
+
+function sign(payload: JwtClaims, secret: string): string {
+	return engine().jwtSign(JSON.stringify(payload), secret);
 }
 
 function verify(token: string, secret: string): JwtClaims | null {
-	const rust = nativeWarden();
-	if (!rust) {
-		throw new E_WARDEN_NAPI_REQUIRED([], { cause: nativeWardenLoadError() });
-	}
+	const rust = engine();
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(rust.jwtVerify(token, secret));

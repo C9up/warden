@@ -255,20 +255,42 @@ export class OtpProvider {
 	}
 
 	/**
-	 * Verify a submitted code. Wrong codes consume an attempt; the challenge is
-	 * deleted on success, on expiry, or once the attempt budget is exhausted.
+	 * Verify a submitted code for the challenge `start(recipient)` opened.
+	 * Wrong codes consume an attempt; the challenge is deleted on success, on
+	 * expiry, or once the attempt budget is exhausted.
+	 *
+	 * `recipient` is the address the code was sent to, as the application
+	 * knows it for the sign-in in progress — never a value read back from the
+	 * request. A challenge started for another recipient answers `not_found`
+	 * and is left as it was: the code in one mailbox does not complete another
+	 * account's sign-in, and a stranger presenting the id spends none of the
+	 * owner's attempts.
 	 */
 	async verify(
 		challengeId: string,
+		recipient: string,
 		code: string,
 		nowMs: number = Date.now(),
 	): Promise<OtpVerification> {
+		// A call written for the two-argument form would compare the code as
+		// the recipient: refused before the challenge is touched.
+		if (typeof code !== "string") {
+			throw new E_WARDEN_INVALID_CONFIG([
+				"OtpProvider.verify(challengeId, recipient, code) needs the recipient the challenge was started for",
+			]);
+		}
 		// TAKE, do not read. The challenge leaves the store before anything is
 		// compared, so a second request racing this one finds nothing and is
 		// refused — whatever the outcome here. Every path below either keeps it
 		// removed or puts it back deliberately.
 		const challenge = await this.#store.take(challengeId);
 		if (!challenge) {
+			return { ok: false, reason: "not_found" };
+		}
+		// Bound to whom it was sent, as a WebAuthn ceremony is bound to its
+		// user. Put back untouched: the owner's code and budget are intact.
+		if (challenge.recipient !== recipient) {
+			await this.#store.save(challenge);
 			return { ok: false, reason: "not_found" };
 		}
 		if (nowMs > challenge.expiresAt) {

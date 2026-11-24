@@ -3,9 +3,16 @@
  * evaluation order (D5), used by BOTH standalone abilities (no hooks) and policy
  * methods (with `before`/`after`). Pinned by `bouncer-parity.test.ts` (AC-E2).
  *
- * Order: (1) `before` — a non-`undefined` return short-circuits the action;
- * (2) guest-deny — `user === null` && !allowGuest ⇒ auto-deny WITHOUT running the
- * action; (3) run the action; (4) `after` — a non-`undefined` return overrides.
+ * Order: (1) `before` — a boolean or an `AuthorizationResponse` short-circuits
+ * the action; (2) guest-deny — `user === null` && !allowGuest ⇒ auto-deny
+ * WITHOUT running the action; (3) run the action; (4) `after` — a boolean or an
+ * `AuthorizationResponse` overrides.
+ *
+ * Only `true` or an allowing `AuthorizationResponse` authorises. A hook that
+ * returns anything else is ignored (the action runs, the response is kept),
+ * and an action that returns anything else is denied — a column that holds
+ * `"false"`, a lookup result, a number: what loosely typed code returns must
+ * not read as a grant.
  */
 
 import type { UserPayload } from "../AuthManager.js";
@@ -29,8 +36,17 @@ export const defaultResponseBuilder: ResponseBuilder = (value) => {
 	if (value instanceof AuthorizationResponse) {
 		return value;
 	}
-	return value ? AuthorizationResponse.allow() : AuthorizationResponse.deny();
+	return value === true
+		? AuthorizationResponse.allow()
+		: AuthorizationResponse.deny();
 };
+
+/** What a check may answer: a boolean or an {@link AuthorizationResponse}. */
+function isAuthorizerResult(
+	value: unknown,
+): value is boolean | AuthorizationResponse {
+	return typeof value === "boolean" || value instanceof AuthorizationResponse;
+}
 
 /**
  * Boolean sugar → response, through whatever builder is installed.
@@ -38,12 +54,22 @@ export const defaultResponseBuilder: ResponseBuilder = (value) => {
  * `Bouncer.responseBuilder` replaces it app-wide, which is how you give every
  * bare `return false` a house message and status instead of a naked 403
  * (AdonisJS `Bouncer.responseBuilder`).
+ *
+ * NAMED DEVIATION — upstream hands an action's raw value to the builder and
+ * reads `.authorized` on whatever comes back, so a string or a number denies
+ * (and `null` crashes). The builder's type takes a boolean or a response, so
+ * a value that is neither reaches it as `false`: the same denial, with the
+ * house message, and no crash. A builder that answers something other than an
+ * `AuthorizationResponse` is a denial too.
  */
 function normalizeResponse(
-	value: boolean | AuthorizationResponse,
-	builder: ResponseBuilder = defaultResponseBuilder,
+	value: unknown,
+	builder: ResponseBuilder,
 ): AuthorizationResponse {
-	return builder(value);
+	const built = builder(isAuthorizerResult(value) ? value : false);
+	return built instanceof AuthorizationResponse
+		? built
+		: AuthorizationResponse.deny();
 }
 
 /**
@@ -93,10 +119,11 @@ export async function evaluate(params: {
 
 	let response: AuthorizationResponse | undefined;
 
-	// (1) before — non-undefined short-circuits the action.
+	// (1) before — a boolean or a response short-circuits the action; any
+	// other value is no opinion, as `undefined` is.
 	if (before) {
-		const early = await before(user, action, ...args);
-		if (early !== undefined) {
+		const early: unknown = await before(user, action, ...args);
+		if (isAuthorizerResult(early)) {
 			response = normalizeResponse(early, builder);
 		}
 	}
@@ -110,11 +137,12 @@ export async function evaluate(params: {
 		}
 	}
 
-	// (4) after — non-undefined overrides. Receives the resource args (Adonis
+	// (4) after — a boolean or a response overrides; any other value keeps the
+	// response. Receives the resource args (Adonis
 	// `policy.after(user, action, result, ...args)`).
 	if (after) {
-		const override = await after(user, action, response, ...args);
-		if (override !== undefined) {
+		const override: unknown = await after(user, action, response, ...args);
+		if (isAuthorizerResult(override)) {
 			response = normalizeResponse(override, builder);
 		}
 	}

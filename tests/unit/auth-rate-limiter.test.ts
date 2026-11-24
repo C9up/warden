@@ -1,8 +1,9 @@
 /**
  * AuthRateLimiter — brute-force protection. An attempt is counted before the
- * credential is checked, under the IP and the identifier; a success clears
- * both. Covers the dual key, the window, identifier normalization, a
- * concurrent burst, the bounded memory store and the refused configurations.
+ * credential is checked, under the IP and the identifier; a sign-in success
+ * clears the identifier's key only. Covers the dual key, the window,
+ * identifier normalization, a concurrent burst, the bounded memory store and
+ * the refused configurations.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -52,13 +53,59 @@ describe("warden > AuthRateLimiter", () => {
 		);
 	});
 
-	it("clears both keys after a success", async () => {
+	it("clear() forgets the keys it is given", async () => {
 		const rl = new AuthRateLimiter({ maxAttempts: 1 });
 		const keys = login("1.1.1.1", "a@b.com");
 		await rl.attempt(...keys);
 		expect(await rl.isBlocked(...keys)).toBe(true);
 		await rl.clear(...keys);
 		expect(await rl.isBlocked(...keys)).toBe(false);
+	});
+
+	it("loginKeys is the address key, then the identifier key", () => {
+		expect(login(" 1.1.1.1 ", "A@B.com ")).toEqual([
+			AuthRateLimiter.ipKey("1.1.1.1"),
+			AuthRateLimiter.identifierKey("a@b.com"),
+		]);
+		expect(AuthRateLimiter.ipKey("1.1.1.1")).toBe("ip:1.1.1.1");
+		expect(AuthRateLimiter.identifierKey("a@b.com")).toMatch(
+			/^id:[A-Za-z0-9_-]{43}$/,
+		);
+	});
+
+	it("a sign-in success clears the identifier only: owning an account does not reset the address limit", async () => {
+		const rl = new AuthRateLimiter({ maxAttempts: 5, windowSeconds: 900 });
+		const ip = "203.0.113.7";
+		const passwords = new Map([["attacker@example.com", "own-password"]]);
+
+		// The sign-in handler the class and the guide document.
+		async function signIn(email: string, password: string): Promise<number> {
+			const keys = AuthRateLimiter.loginKeys(ip, email);
+			if (!(await rl.attempt(...keys)).allowed) return 429;
+			if (passwords.get(email) !== password) return 401;
+			await rl.clear(AuthRateLimiter.identifierKey(email));
+			return 200;
+		}
+
+		const statuses: number[] = [];
+		for (let victim = 0; victim < 40; victim++) {
+			statuses.push(await signIn(`victim${victim}@example.com`, "Spring2026!"));
+			// Every 4th guess, a sign-in to the client's own account.
+			if (victim % 4 === 3)
+				await signIn("attacker@example.com", "own-password");
+		}
+		// Four guesses, one own sign-in: the address key is spent at the 5th
+		// attempt and every guess after it is refused.
+		expect(statuses.filter((status) => status === 401)).toHaveLength(4);
+		expect(statuses.slice(4).every((status) => status === 429)).toBe(true);
+
+		// The identifier's counter is what a success clears: from another
+		// address, the owner signs in at once.
+		const own = AuthRateLimiter.loginKeys(
+			"198.51.100.1",
+			"attacker@example.com",
+		);
+		expect((await rl.attempt(...own)).remaining).toBe(4);
 	});
 
 	it("starts over once the window has passed", async () => {

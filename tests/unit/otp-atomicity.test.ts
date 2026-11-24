@@ -56,8 +56,8 @@ describe("warden > OTP under concurrency", () => {
 		const { challengeId } = await otp.start("user@example.com");
 
 		const results = await Promise.all([
-			otp.verify(challengeId, code()),
-			otp.verify(challengeId, code()),
+			otp.verify(challengeId, "user@example.com", code()),
+			otp.verify(challengeId, "user@example.com", code()),
 		]);
 
 		// Two `{ ok: true }` means the code was spendable twice — a stolen code
@@ -74,7 +74,9 @@ describe("warden > OTP under concurrency", () => {
 		const { challengeId } = await otp.start("user@example.com");
 
 		const results = await Promise.all(
-			Array.from({ length: 20 }, () => otp.verify(challengeId, "000000")),
+			Array.from({ length: 20 }, () =>
+				otp.verify(challengeId, "user@example.com", "000000"),
+			),
 		);
 		const evaluated = results.filter(
 			(r) =>
@@ -91,17 +93,22 @@ describe("warden > OTP under concurrency", () => {
 		const { otp, code } = provider(new SlowStore(), 3);
 		const { challengeId } = await otp.start("user@example.com");
 
-		for (let i = 0; i < 3; i++) await otp.verify(challengeId, "000000");
+		for (let i = 0; i < 3; i++)
+			await otp.verify(challengeId, "user@example.com", "000000");
 
 		// Spent: the real code must no longer open it.
-		expect((await otp.verify(challengeId, code())).ok).toBe(false);
+		expect((await otp.verify(challengeId, "user@example.com", code())).ok).toBe(
+			false,
+		);
 	});
 
 	it("still accepts a correct code on its own", async () => {
 		const { otp, code } = provider(new SlowStore());
 		const { challengeId } = await otp.start("user@example.com");
 
-		expect(await otp.verify(challengeId, code())).toEqual({ ok: true });
+		expect(await otp.verify(challengeId, "user@example.com", code())).toEqual({
+			ok: true,
+		});
 	});
 });
 

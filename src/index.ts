@@ -110,6 +110,8 @@ export type {
 } from "./mfa/BackupCodesProvider.js";
 export { BackupCodesProvider } from "./mfa/BackupCodesProvider.js";
 export type {
+	MfaChangeOptions,
+	MfaEnrollOptions,
 	MfaFactor,
 	MfaFactorKind,
 	MfaFactorStore,
@@ -165,13 +167,15 @@ export { RedisBlacklistDriver } from "./RedisBlacklistDriver.js";
 export type {
 	MintedRefreshToken,
 	RefreshTokenDriver,
+	RefreshTokenRotation,
+	RefreshTokenSuccessor,
 	StoredRefreshToken,
 } from "./RefreshTokenStore.js";
 export {
-	generateRefreshToken,
-	hashRefreshToken,
+	decodeRefreshToken,
 	MemoryRefreshTokenDriver,
 	mintRefreshToken,
+	rotateRefreshToken,
 } from "./RefreshTokenStore.js";
 export {
 	DEFAULT_SECRET_LENGTH,

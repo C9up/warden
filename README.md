@@ -41,6 +41,24 @@ authorization; an override inherits them too unless it declares its own.
 - **Multi-factor authentication** — TOTP, backup codes, email/SMS OTP, WebAuthn/passkeys, all dependency-free
 - JWT and session revocation blacklist (Memory / Redis-KeyDB / resilient fallback drivers)
 
+## Native engine
+
+JWT signing and verification run in warden's Rust engine only. Each platform's engine is its own npm package, which `@c9up/warden` lists as an optional dependency at its exact version:
+
+| Platform | Package |
+|---|---|
+| Linux x64 (glibc) | `@c9up/warden-linux-x64-gnu` |
+| Linux arm64 (glibc) | `@c9up/warden-linux-arm64-gnu` |
+| macOS x64 | `@c9up/warden-darwin-x64` |
+| macOS arm64 | `@c9up/warden-darwin-arm64` |
+| Windows x64 | `@c9up/warden-win32-x64-msvc` |
+
+Your package manager installs only the one that matches the machine (`os`, `cpu` and `libc` fields), so an install downloads one binary and needs no Rust toolchain. An install run with optional dependencies omitted (`--no-optional`, `--omit=optional`) skips it.
+
+If the engine is missing, the first JWT sign or verify throws `E_WARDEN_NAPI_REQUIRED`, naming the package to install. The load error itself is the exception's `cause`.
+
+In a checkout of this repository, `pnpm build:napi` builds `index.<platform>.node` at the package root, and warden loads that file before looking for the platform package. `node scripts/platform-packages.mjs` rewrites the platform packages' manifests (`npm/<platform>/package.json`) and the optional dependencies after a version bump; CI fails when they are stale.
+
 ## Access tokens
 
 Opaque bearer tokens for APIs, CLIs and mobile apps. A token value looks like
@@ -121,13 +139,17 @@ const mfa = new MfaManager({
   rateLimit: { maxAttempts: 5, windowSeconds: 900 }, // per-user brute-force lock
 })
 
+// Changing the factors of an account that already has MFA needs the step-up
+// (E_WARDEN_MFA_REQUIRED otherwise); the first enrolment does not.
+const stepUp = ctx.auth.user?.mfa === true
+
 // Enroll (returns the otpauth:// URI to render as a QR code)
-const { factorId, uri } = await mfa.enrollTotp({ id: user.id, name: user.email })
-await mfa.confirmTotp(user.id, factorId, codeFromAuthenticatorApp)   // → true once confirmed
-const recoveryCodes = await mfa.createBackupCodes(user.id)  // show once
+const { factorId, uri } = await mfa.enrollTotp({ id: user.id, name: user.email }, { stepUp })
+await mfa.confirmTotp(user.id, factorId, codeFromAuthenticatorApp, { stepUp }) // → true once confirmed
+const recoveryCodes = await mfa.createBackupCodes(user.id, { stepUp }) // show once
 
 // Factor operations name the owner, and refuse a factor that is not theirs.
-await mfa.disableFactor(user.id, factorId)                  // → false if not theirs
+await mfa.disableFactor(user.id, factorId, { stepUp })      // → false if not theirs
 
 // At sign-in step-up: TOTP code OR a backup code (rate-limited)
 if (await mfa.verify(user.id, submittedCode)) {

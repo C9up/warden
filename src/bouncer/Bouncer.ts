@@ -54,8 +54,16 @@ export class Bouncer {
 	 *
 	 * ```ts
 	 * Bouncer.responseBuilder = (value) =>
-	 *   value === false ? AuthorizationResponse.deny('Nope', 404) : normalizeResponse(value)
+	 *   value instanceof AuthorizationResponse
+	 *     ? value
+	 *     : value === true
+	 *       ? AuthorizationResponse.allow()
+	 *       : AuthorizationResponse.deny('Nope', 404)
 	 * ```
+	 *
+	 * It receives a boolean or a response. A check that returned anything else
+	 * reaches it as `false`, and what it answers must be an
+	 * `AuthorizationResponse`: anything else is a denial.
 	 */
 	static responseBuilder: ResponseBuilder = defaultResponseBuilder;
 

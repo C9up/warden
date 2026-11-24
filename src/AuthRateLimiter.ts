@@ -5,7 +5,6 @@
  * An attempt is counted BEFORE the credential is checked, by one atomic
  * increment per key ({@link AttemptStore}): checking first and recording the
  * failure afterwards let a burst of concurrent attempts all pass the check.
- * A success clears the keys.
  *
  * A login is counted under two keys, its IP and its identifier
  * ({@link AuthRateLimiter.loginKeys}), so neither spraying one password across
@@ -14,7 +13,13 @@
  *   const keys = AuthRateLimiter.loginKeys(ctx.request.ip(), email)
  *   if (!(await limiter.attempt(...keys)).allowed) return tooManyAttempts()
  *   const user = await verify(email, password)
- *   if (user) await limiter.clear(...keys)
+ *   if (user) await limiter.clear(AuthRateLimiter.identifierKey(email))
+ *
+ * NAMED DEVIATION — `@adonisjs/limiter`'s `penalize` resets every key on a
+ * success. A sign-in success here clears the identifier's key only; the
+ * address's key runs to the end of its window. Reset on success, the address
+ * key stopped nobody who owns one account: a few guesses against other
+ * accounts, one sign-in to their own, and the count was back to zero.
  *
  * @implements MISS-26
  */
@@ -67,10 +72,26 @@ export class AuthRateLimiter {
 	 * verbatim a 1 MB body pinned 1 MB in the store for the whole window.
 	 */
 	static loginKeys(ip: string, identifier: string): string[] {
+		return [
+			AuthRateLimiter.ipKey(ip),
+			AuthRateLimiter.identifierKey(identifier),
+		];
+	}
+
+	/** The key a login is counted under for its address. */
+	static ipKey(ip: string): string {
+		return `ip:${ip.trim()}`;
+	}
+
+	/**
+	 * The key a login is counted under for its identifier: what a successful
+	 * sign-in clears, and the only one it clears.
+	 */
+	static identifierKey(identifier: string): string {
 		const digest = createHash("sha256")
 			.update(identifier.trim().toLowerCase())
 			.digest("base64url");
-		return [`ip:${ip.trim()}`, `id:${digest}`];
+		return `id:${digest}`;
 	}
 
 	/**
@@ -105,7 +126,12 @@ export class AuthRateLimiter {
 		return counts.some((count) => count >= this.#maxAttempts);
 	}
 
-	/** Forget the keys' attempts — after a success. */
+	/**
+	 * Forget the keys' attempts. After a sign-in, clear the identifier's key
+	 * only ({@link AuthRateLimiter.identifierKey}): clearing the address's key
+	 * too lets a client that owns an account reset its per-address limit at
+	 * will.
+	 */
 	async clear(...keys: string[]): Promise<void> {
 		await Promise.all(keys.map((key) => this.#store.reset(key)));
 	}

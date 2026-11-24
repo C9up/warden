@@ -14,10 +14,11 @@ import type { HookResponse } from "./types.js";
 
 export abstract class BasePolicy {
 	/**
-	 * Runs before the action. A non-`undefined` return short-circuits the action
-	 * (a `boolean`/`AuthorizationResponse` becomes the result) — this is how a
+	 * Runs before the action. A `boolean` or an `AuthorizationResponse`
+	 * short-circuits the action and becomes the result — this is how a
 	 * moderator bypass or an early `deny('not found', 404)` works, including for
-	 * a guest. `undefined`/`void` falls through to the action.
+	 * a guest. Anything else (`undefined`, a string, a number) falls through to
+	 * the action.
 	 */
 	before?(
 		user: UserPayload | null,
@@ -28,8 +29,8 @@ export abstract class BasePolicy {
 	/**
 	 * Runs after the action (or after a `before` short-circuit), receiving the
 	 * resolved response and the same resource args passed to the action (Adonis
-	 * `after(user, action, result, ...args)`). A non-`undefined` return overrides
-	 * the response; `undefined` keeps it.
+	 * `after(user, action, result, ...args)`). A `boolean` or an
+	 * `AuthorizationResponse` overrides the response; anything else keeps it.
 	 */
 	after?(
 		user: UserPayload | null,

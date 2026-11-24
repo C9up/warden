@@ -3,6 +3,7 @@
  * generation/consumption/regeneration, the unified verify(), and status helpers.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as errors from "../../src/errors.js";
 import { BackupCodesProvider } from "../../src/mfa/BackupCodesProvider.js";
 import { MfaManager } from "../../src/mfa/MfaManager.js";
 import { TotpProvider } from "../../src/mfa/TotpProvider.js";
@@ -42,7 +43,9 @@ describe("warden > MfaManager — TOTP", () => {
 	it("enrolls pending, then confirms with a valid code", async () => {
 		const m = manager();
 		const totp = new TotpProvider();
-		const { factorId, secret, uri } = await m.enrollTotp(USER, "iPhone");
+		const { factorId, secret, uri } = await m.enrollTotp(USER, {
+			label: "iPhone",
+		});
 		expect(uri).toContain("otpauth://totp/Fluveo");
 		// Pending: not yet enabled and verifyTotp ignores it.
 		expect(await m.isEnabled(USER.id)).toBe(false);
@@ -60,7 +63,7 @@ describe("warden > MfaManager — TOTP", () => {
 	it("refuses a code that has already been accepted", async () => {
 		const m = manager();
 		const totp = new TotpProvider();
-		const { factorId, secret } = await m.enrollTotp(USER, "iPhone");
+		const { factorId, secret } = await m.enrollTotp(USER, { label: "iPhone" });
 		const code = totp.generate(secret);
 		expect(await m.confirmTotp(USER.id, factorId, code)).toBe(true);
 		// Same code, still inside its window — a replay, and refused.
@@ -85,8 +88,9 @@ describe("warden > MfaManager — backup codes", () => {
 		// Consumed.
 		expect(await m.verifyBackupCode(USER.id, defined(codes[0]))).toBe(false);
 
-		// Regenerate replaces: the remaining old codes stop working.
-		const fresh = await m.createBackupCodes(USER.id);
+		// Regenerate replaces: the remaining old codes stop working. The codes
+		// are a confirmed factor, so the regeneration needs the step-up.
+		const fresh = await m.createBackupCodes(USER.id, { stepUp: true });
 		expect(await m.verifyBackupCode(USER.id, defined(codes[1]))).toBe(false);
 		expect(await m.verifyBackupCode(USER.id, defined(fresh[0]))).toBe(true);
 
@@ -102,7 +106,7 @@ describe("warden > MfaManager — unified verify & status", () => {
 		const { factorId, secret } = await m.enrollTotp(USER);
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		await m.confirmTotp(USER.id, factorId, totp.generate(secret));
-		const codes = await m.createBackupCodes(USER.id);
+		const codes = await m.createBackupCodes(USER.id, { stepUp: true });
 
 		nextTimeStep();
 		expect(await m.verify(USER.id, totp.generate(secret))).toBe(true);
@@ -112,7 +116,7 @@ describe("warden > MfaManager — unified verify & status", () => {
 
 	it("listFactors never leaks secrets, and disableFactor removes it", async () => {
 		const m = manager();
-		const { factorId } = await m.enrollTotp(USER, "Yubikey");
+		const { factorId } = await m.enrollTotp(USER, { label: "Yubikey" });
 		const factor = defined((await m.listFactors(USER.id))[0]);
 		expect(factor).toEqual({
 			id: factorId,
@@ -289,5 +293,126 @@ describe("warden > MfaManager — rate limit", () => {
 		expect(await m.verify(USER.id, "000000")).toBe(false);
 		expect(await m.verify(USER.id, "000001")).toBe(false);
 		expect(await m.isLocked(USER.id)).toBe(false);
+	});
+});
+
+describe("warden > MfaManager — changing the factors of an account with MFA needs the step-up", () => {
+	/** An account whose owner enrolled and confirmed an authenticator. */
+	async function accountWithMfa() {
+		const m = manager();
+		const totp = new TotpProvider();
+		const owner = await m.enrollTotp(USER);
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		expect(
+			await m.confirmTotp(USER.id, owner.factorId, totp.generate(owner.secret)),
+		).toBe(true);
+		nextTimeStep();
+		return { m, totp, owner };
+	}
+
+	const required = { code: "E_WARDEN_MFA_REQUIRED", status: 403 };
+
+	it("refuses new backup codes without the step-up, and keeps the old ones", async () => {
+		const { m } = await accountWithMfa();
+		const first = await m.createBackupCodes(USER.id, { stepUp: true });
+		for (const options of [undefined, {}, { stepUp: false }]) {
+			await expect(m.createBackupCodes(USER.id, options)).rejects.toMatchObject(
+				required,
+			);
+		}
+		// The set the owner holds still works: nothing was replaced.
+		expect(await m.verifyBackupCode(USER.id, defined(first[0]))).toBe(true);
+		expect(
+			(await m.listFactors(USER.id)).filter((f) => f.kind === "backup_codes"),
+		).toHaveLength(1);
+	});
+
+	it("refuses a second authenticator without the step-up, at enrolment and at confirmation", async () => {
+		const { m, totp } = await accountWithMfa();
+		await expect(m.enrollTotp(USER)).rejects.toMatchObject(required);
+		expect(await m.listFactors(USER.id)).toHaveLength(1);
+
+		const added = await m.enrollTotp(USER, { stepUp: true });
+		await expect(
+			m.confirmTotp(USER.id, added.factorId, totp.generate(added.secret)),
+		).rejects.toMatchObject(required);
+		expect(
+			await m.confirmTotp(
+				USER.id,
+				added.factorId,
+				totp.generate(added.secret),
+				{
+					stepUp: true,
+				},
+			),
+		).toBe(true);
+		expect(
+			(await m.listFactors(USER.id)).filter((f) => f.confirmed),
+		).toHaveLength(2);
+	});
+
+	it("refuses to remove the owner's factor without the step-up", async () => {
+		const { m, owner } = await accountWithMfa();
+		await expect(
+			m.disableFactor(USER.id, owner.factorId),
+		).rejects.toMatchObject(required);
+		expect(await m.isEnabled(USER.id)).toBe(true);
+		expect(
+			await m.disableFactor(USER.id, owner.factorId, { stepUp: true }),
+		).toBe(true);
+		expect(await m.isEnabled(USER.id)).toBe(false);
+	});
+
+	it("lets the first factor be set up without a step-up: there is nothing to step up with", async () => {
+		const m = manager();
+		const totp = new TotpProvider();
+		const pending = await m.enrollTotp(USER, { label: "iPhone" });
+		// A pending factor does not turn MFA on: it can be dropped and redone.
+		expect(await m.disableFactor(USER.id, pending.factorId)).toBe(true);
+		const first = await m.enrollTotp(USER);
+		expect(
+			await m.confirmTotp(USER.id, first.factorId, totp.generate(first.secret)),
+		).toBe(true);
+		// From here on, the account has MFA.
+		await expect(m.createBackupCodes(USER.id)).rejects.toMatchObject(required);
+	});
+
+	it("a refused confirmation spends no attempt of the lockout", async () => {
+		const { m, totp, owner } = await accountWithMfa();
+		const added = await m.enrollTotp(USER, { stepUp: true });
+		for (let i = 0; i < 10; i++) {
+			await expect(
+				m.confirmTotp(USER.id, added.factorId, "000000"),
+			).rejects.toMatchObject(required);
+		}
+		expect(await m.isLocked(USER.id)).toBe(false);
+		expect(await m.verify(USER.id, totp.generate(owner.secret))).toBe(true);
+	});
+
+	it("renders the refusal as a @RequireMfa route does", async () => {
+		const { m } = await accountWithMfa();
+		const error = await m.createBackupCodes(USER.id).catch((e: unknown) => e);
+		expect(error).toBeInstanceOf(errors.E_WARDEN_MFA_REQUIRED);
+		if (!(error instanceof errors.E_WARDEN_MFA_REQUIRED)) return;
+		const written: { status?: number; body?: unknown } = {};
+		await error.handle(error, {
+			response: {
+				status: (code: number) => {
+					written.status = code;
+				},
+				json: (body: unknown) => {
+					written.body = body;
+				},
+			},
+		});
+		expect(written).toEqual({
+			status: 403,
+			body: {
+				error: {
+					code: "E_WARDEN_MFA_REQUIRED",
+					message: "Multi-factor authentication is required for this action.",
+				},
+			},
+		});
 	});
 });
